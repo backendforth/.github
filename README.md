@@ -16,7 +16,7 @@ Org-wide GitHub Actions reusable workflows for Slack PR notifications.
 6. **Documentation** — only when breaking changes + links exist
 7. View PR · Start review
 
-**Dependabot PRs:** Optional `*Claude review*` section with a real Slack mention (`<@USER_ID>`) when `SLACK_CLAUDE_USER_ID` is set. Plain `@Claude` text does not ping — the member ID is required.
+**Dependabot PRs:** `*Claude review*` section @-mentions Claude (`<@U0BAPTE85TL>`). `/invite @Claude` in `#github-logs` required.
 
 Attachment bar colors: green (`#2EB67D`) for human PRs, blue (`#439FE0`) for Dependabot. Divider only before Summary.
 
@@ -70,8 +70,5 @@ jobs:
 |---|---|
 | `SLACK_WEBHOOK_URL` | Incoming Webhook → `#github-logs` |
 | `OPENROUTER_API_KEY` | Dependabot breaking-change analysis |
-| `SLACK_CLAUDE_USER_ID` | Optional — `@Claude` member ID (e.g. `U0BAPTE85TL`) for Dependabot review pings |
-
-**Claude mention:** Set `SLACK_CLAUDE_USER_ID` to Claude's member ID (Developer mode → `@Claude` profile → Copy member ID). `/invite @Claude` in `#github-logs`. No extra Slack app needed — the webhook uses `<@USER_ID>` mrkdwn. If Claude does not auto-reply to webhook messages, a follow-up via Slack Bot API is the fallback (not configured by default).
 
 Scope: all enrolled repos (`next-sanity-starter`, `bef-website-2026`, `farbstudio.de`, `mammalsandcomputers`).
