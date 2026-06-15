@@ -16,7 +16,7 @@ Org-wide GitHub Actions reusable workflows for Slack PR notifications.
 6. **Documentation** — only when breaking changes + links exist
 7. View PR · Start review
 
-**Dependabot PRs:** OpenRouter analyzes breaking changes and documentation links. Optional second message @-mentions Claude via the Slack Web API (see secrets below).
+**Dependabot PRs:** Optional `*Claude review*` section with a real Slack mention (`<@USER_ID>`) when `SLACK_CLAUDE_USER_ID` is set. Plain `@Claude` text does not ping — the member ID is required.
 
 Attachment bar colors: green (`#2EB67D`) for human PRs, blue (`#439FE0`) for Dependabot. Divider only before Summary.
 
@@ -70,22 +70,8 @@ jobs:
 |---|---|
 | `SLACK_WEBHOOK_URL` | Incoming Webhook → `#github-logs` |
 | `OPENROUTER_API_KEY` | Dependabot breaking-change analysis |
-| `SLACK_BOT_TOKEN` | Optional — Bot token (`xoxb-…`) for real `@Claude` mentions |
-| `SLACK_CHANNEL_ID` | Optional — Channel ID for `#github-logs` (e.g. `C012…`) |
-| `SLACK_CLAUDE_USER_ID` | Optional override if auto-lookup of `@Claude` fails |
+| `SLACK_CLAUDE_USER_ID` | Optional — `@Claude` member ID (e.g. `U0BAPTE85TL`) for Dependabot review pings |
 
-### Claude @-mention (Dependabot PRs)
-
-Incoming webhooks cannot trigger `@Claude` — plain `@Claude` text is not a real mention. For Dependabot opens, the workflow posts the card via webhook, then sends a **second message** via `chat.postMessage` with `<@ClaudeUserId>`.
-
-**One-time setup**
-
-1. `/invite @Claude` in `#github-logs`
-2. Enable **Developer mode** in Slack (Preferences → Advanced)
-3. Copy **Channel ID**: `#github-logs` → channel details → bottom of dialog → `C…`
-4. Create a small Slack app (or reuse one) with scopes `chat:write`, `users:read` → install to workspace → copy **Bot User OAuth Token** (`xoxb-…`)
-5. Org secrets: `SLACK_BOT_TOKEN`, `SLACK_CHANNEL_ID` (optional: `SLACK_CLAUDE_USER_ID` if lookup fails)
-
-Claude must be in the channel and your account connected in the Claude Slack app. Claude may ignore mentions from other bots in some workspaces — if the ping appears but Claude stays silent, reply manually in the thread once to confirm routing.
+**Claude mention:** Set `SLACK_CLAUDE_USER_ID` to Claude's member ID (Developer mode → `@Claude` profile → Copy member ID). `/invite @Claude` in `#github-logs`. No extra Slack app needed — the webhook uses `<@USER_ID>` mrkdwn. If Claude does not auto-reply to webhook messages, a follow-up via Slack Bot API is the fallback (not configured by default).
 
 Scope: all enrolled repos (`next-sanity-starter`, `bef-website-2026`, `farbstudio.de`, `mammalsandcomputers`).
