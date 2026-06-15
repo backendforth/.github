@@ -201,8 +201,9 @@ jobs:
                 [{ type: "divider" }]
                 + [
                   { type: "section", text: { type: "mrkdwn", text:
-                    (slack_code("➔ New PR · " + $m.repo) + "\n" +
-                     slack_link_code($m.url; "➔ " + $m.title + " #" + ($m.number | tostring))) } },
+                    ("➔ New PR\n" +
+                     slack_code($m.repo) + "\n" +
+                     slack_link_code($m.url; $m.title + " #" + ($m.number | tostring))) } },
                   { type: "section", text: { type: "mrkdwn", text:
                     ("*Status:* " + $m.status + "\n" +
                      "*Opener:* `" + $m.author + "` · *Latest commit:* `" + $m.head_sha + "` · *Tags:* " + $tags + " · *Related issues:* " + $issues + "\n" +
@@ -255,8 +256,9 @@ jobs:
                 [{ type: "divider" }]
                 + [
                   { type: "section", text: { type: "mrkdwn",
-                    text: (slack_code("⤴ Merged PR · " + $repo) + "\n" +
-                      slack_link_code($url; "⤴ " + $title + " #" + $number)) } },
+                    text: ("⤴ Merged PR\n" +
+                      slack_code($repo) + "\n" +
+                      slack_link_code($url; $title + " #" + $number)) } },
                   { type: "actions", elements: [
                     { type: "button", text: { type: "plain_text", text: "View repo" }, url: $repo_url },
                     { type: "button", text: { type: "plain_text", text: "View PR" }, url: $url, style: "primary" }
