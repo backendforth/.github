@@ -26,10 +26,11 @@ status footer, Review button:
 📥 Status: Offen          [Review PR →]
 ```
 
-**On merge** — status only (no duplicate summary):
+**On merge** — one line, no AI summary:
 
 ```
-✅ Status: Gemerged · `repo` · PR title (link) · `author`
+MERGED — PR #123 by `author`
+[View repo]  [View PR]
 ```
 
 #### How to enroll a repo
@@ -56,8 +57,8 @@ status footer, Review button:
    ```
 
 3. Open a test PR — within ~30 s a message with summary + `📥 Status: Offen`
-   appears in `#github-logs`. Merge the PR → a short `✅ Status: Gemerged` line
-   follows (no second AI summary).
+   appears in `#github-logs`. Merge the PR → `MERGED — PR #N by author` with
+   repo and PR links (no second summary).
 
 #### Org secrets it expects
 
