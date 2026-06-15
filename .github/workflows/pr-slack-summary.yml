@@ -184,6 +184,7 @@ jobs:
             '
             def slack_code($s): "`" + $s + "`";
             def slack_codeblock($s): "```\n" + $s + "\n```";
+            def slack_link_code($url; $s): "<" + $url + "|`" + $s + "`>";
             ($meta[0]) as $m |
             ($analysis[0]) as $a |
             (if ($m.labels | length) > 0
@@ -195,37 +196,37 @@ jobs:
             (if ($a.breaking_changes | length) > 0
               then ([$a.breaking_changes[] | "- " + .] | join("\n"))
               else "_None_" end) as $breaking |
-            { blocks: (
-              [{ type: "divider" }]
-              + [{ type: "context", elements: [
-                  { type: "mrkdwn", text: ("`" + $m.repo + "` · PR #" + ($m.number | tostring)) }
-                ]}]
-              + [
-                { type: "section", text: { type: "mrkdwn", text:
-                  (slack_code("➔ New PR · " + $m.repo) + "\n" +
-                   slack_code("➔ " + $m.title) + " <" + $m.url + "|#" + ($m.number | tostring) + ">\n" +
-                   "*Status:* " + $m.status + "\n" +
-                   "*Opener:* `" + $m.author + "` · *Latest commit:* `" + $m.head_sha + "` · *Tags:* " + $tags + " · *Related issues:* " + $issues + "\n" +
-                   "*Commits:* " + ($m.commit_count | tostring) + "\n" +
-                   "*Files:* " + ($m.changed_files | tostring) + " changed · *Lines:* +" + ($m.additions | tostring) + " / −" + ($m.deletions | tostring)) } },
-                { type: "divider" },
-                { type: "section", text: { type: "mrkdwn",
-                  text: ("*Summary*\n" + (slack_codeblock($m.pr_summary))) } },
-                { type: "section", text: { type: "mrkdwn",
-                  text: ("*Breaking changes*\n" + (slack_codeblock($breaking))) } }
-              ]
-              + (if (($a.breaking_changes | length) > 0) and (($a.documentation_links | length) > 0) then
-                  [{ type: "section", text: { type: "mrkdwn",
-                    text: ("*Documentation*\n" +
-                      ([$a.documentation_links[] | "- <" + . + "|" + . + ">"] | join("\n"))) } }]
-                else [] end)
-              + [{ type: "actions", elements: [
-                  { type: "button", text: { type: "plain_text", text: "View PR" }, url: $m.url },
-                  { type: "button", text: { type: "plain_text", text: "Start review" },
-                    url: $m.review_url, style: "primary" }
-                ]}]
-              + [{ type: "divider" }]
-            ) }' > slack.json
+            { attachments: [
+              { color: "2EB67D", blocks: (
+                [{ type: "divider" }]
+                + [
+                  { type: "section", text: { type: "mrkdwn", text:
+                    (slack_code("➔ New PR · " + $m.repo) + "\n" +
+                     slack_link_code($m.url; "➔ " + $m.title + " #" + ($m.number | tostring))) } },
+                  { type: "section", text: { type: "mrkdwn", text:
+                    ("*Status:* " + $m.status + "\n" +
+                     "*Opener:* `" + $m.author + "` · *Latest commit:* `" + $m.head_sha + "` · *Tags:* " + $tags + " · *Related issues:* " + $issues + "\n" +
+                     "*Commits:* " + ($m.commit_count | tostring) + "\n" +
+                     "*Files:* " + ($m.changed_files | tostring) + " changed · *Lines:* +" + ($m.additions | tostring) + " / −" + ($m.deletions | tostring)) } },
+                  { type: "divider" },
+                  { type: "section", text: { type: "mrkdwn",
+                    text: ("*Summary*\n" + (slack_codeblock($m.pr_summary))) } },
+                  { type: "section", text: { type: "mrkdwn",
+                    text: ("*Breaking changes*\n" + (slack_codeblock($breaking))) } }
+                ]
+                + (if (($a.breaking_changes | length) > 0) and (($a.documentation_links | length) > 0) then
+                    [{ type: "section", text: { type: "mrkdwn",
+                      text: ("*Documentation*\n" +
+                        ([$a.documentation_links[] | "- <" + . + "|" + . + ">"] | join("\n"))) } }]
+                  else [] end)
+                + [{ type: "actions", elements: [
+                    { type: "button", text: { type: "plain_text", text: "View PR" }, url: $m.url },
+                    { type: "button", text: { type: "plain_text", text: "Start review" },
+                      url: $m.review_url, style: "primary" }
+                  ]}]
+                + [{ type: "divider" }]
+              ) }
+            ] }' > slack.json
 
           cat slack.json
 
@@ -234,7 +235,6 @@ jobs:
         env:
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_URL: ${{ github.event.pull_request.html_url }}
-          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           REPO_FULL: ${{ github.repository }}
           REPO_URL: ${{ github.event.repository.html_url }}
@@ -244,29 +244,27 @@ jobs:
           jq -n \
             --arg title "$PR_TITLE" \
             --arg url "$PR_URL" \
-            --arg author "$PR_AUTHOR" \
             --arg number "$PR_NUMBER" \
             --arg repo "$REPO_FULL" \
             --arg repo_url "$REPO_URL" \
             '
             def slack_code($s): "`" + $s + "`";
-            { blocks: (
-              [{ type: "divider" }]
-              + [{ type: "context", elements: [
-                  { type: "mrkdwn", text: ("`" + $repo + "` · PR #" + $number) }
-                ]}]
-              + [
-                { type: "section", text: { type: "mrkdwn",
-                  text: (slack_code("⤴ Merged PR · " + $repo) + "\n" +
-                    slack_code("⤴ PR #" + $number + " by " + $author) + "\n" +
-                    "<" + $url + "|" + $title + ">") } },
-                { type: "actions", elements: [
-                  { type: "button", text: { type: "plain_text", text: "View repo" }, url: $repo_url },
-                  { type: "button", text: { type: "plain_text", text: "View PR" }, url: $url, style: "primary" }
-                ]}
-              ]
-              + [{ type: "divider" }]
-            ) }' > slack.json
+            def slack_link_code($url; $s): "<" + $url + "|`" + $s + "`>";
+            { attachments: [
+              { color: "9B59B6", blocks: (
+                [{ type: "divider" }]
+                + [
+                  { type: "section", text: { type: "mrkdwn",
+                    text: (slack_code("⤴ Merged PR · " + $repo) + "\n" +
+                      slack_link_code($url; "⤴ " + $title + " #" + $number)) } },
+                  { type: "actions", elements: [
+                    { type: "button", text: { type: "plain_text", text: "View repo" }, url: $repo_url },
+                    { type: "button", text: { type: "plain_text", text: "View PR" }, url: $url, style: "primary" }
+                  ]}
+                ]
+                + [{ type: "divider" }]
+              ) }
+            ] }' > slack.json
 
           cat slack.json
 
