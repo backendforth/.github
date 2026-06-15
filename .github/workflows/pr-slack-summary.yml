@@ -151,7 +151,7 @@ jobs:
             --slurpfile ai ai.json \
             '
             ($ai[0]) as $ai |
-            { blocks:
+            { blocks: (
               [
                 { type: "section", text: { type: "mrkdwn",
                   text: ("*<" + $url + "|" + $title + ">*\n`" + $repo + "` · `" + $author + "`") } },
@@ -160,20 +160,20 @@ jobs:
               ]
               + (if ($ai.breaking_changes | length) > 0 then
                   [{ type: "section", text: { type: "mrkdwn",
-                    text: ("⚠️ *Breaking changes*\n" +
-                      ([$ai.breaking_changes[] | "• " + .] | join("\n"))) } }]
+                    text: ("*Breaking changes*\n" +
+                      ([$ai.breaking_changes[] | "- " + .] | join("\n"))) } }]
                 else [] end)
               + [
                 { type: "context", elements: [
-                  { type: "mrkdwn", text: "📥 *Status:* Open" }
+                  { type: "mrkdwn", text: "*Status:* Open" }
                 ] },
                 { type: "actions", elements: [
                   { type: "button",
-                    text: { type: "plain_text", text: "Review PR →" },
+                    text: { type: "plain_text", text: "Start review" },
                     url: $url, style: "primary" }
                 ] }
               ]
-            }' > slack.json
+            ) }' > slack.json
 
           cat slack.json
 
