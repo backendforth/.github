@@ -1,7 +1,7 @@
 name: PR → Slack summary
 
 # Open: PR body summary (not AI) + optional Dependabot AI for breaking changes.
-# Merge: compact message with code labels.
+# Merge / closed: compact cards with shared header layout.
 
 on:
   workflow_call:
@@ -28,8 +28,7 @@ jobs:
   notify:
     if: |
       github.event.pull_request.draft == false &&
-      github.event.pull_request.head.repo.full_name == github.repository &&
-      (github.event.action != 'closed' || github.event.pull_request.merged == true)
+      github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     steps:
       - name: Collect PR metadata
@@ -39,6 +38,8 @@ jobs:
           GH_REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           EVENT_ACTION: ${{ github.event.action }}
+          PR_MERGED: ${{ github.event.pull_request.merged }}
+          CLOSED_BY: ${{ github.event.sender.login }}
         run: |
           set -euo pipefail
 
@@ -50,6 +51,7 @@ jobs:
             --slurpfile pr pr.json \
             --arg repo "$GH_REPO" \
             --arg action "$EVENT_ACTION" \
+            --arg closed_by "$CLOSED_BY" \
             '($pr[0]) as $p |
             ($p.body // "") as $raw |
             ($raw | gsub("<!--[\\s\\S]*?-->"; "")) as $body |
@@ -63,7 +65,7 @@ jobs:
             ([$p.closingIssuesReferences[]? | "#\(.number)"] +
               ([$body | scan("#[0-9]+")] | unique)) as $issue_refs |
             (if $p.mergeStateStatus == "DIRTY" then "Conflicts"
-             elif $action == "closed" then "Merged"
+             elif $action == "closed" then "Closed"
              else "Open" end) as $status |
             {
               repo: $repo,
@@ -73,6 +75,7 @@ jobs:
               url: $p.url,
               review_url: ($p.url + "/files"),
               author: $p.author.login,
+              closed_by: $closed_by,
               status: $status,
               head_sha: ($p.headRefOid[0:7]),
               labels: [$p.labels[] | .name],
@@ -111,7 +114,11 @@ jobs:
           fi
 
           if [[ "$EVENT_ACTION" == "closed" ]]; then
-            echo "event_type=merged" >> "$GITHUB_OUTPUT"
+            if [[ "$PR_MERGED" == "true" ]]; then
+              echo "event_type=merged" >> "$GITHUB_OUTPUT"
+            else
+              echo "event_type=closed" >> "$GITHUB_OUTPUT"
+            fi
           else
             echo "event_type=opened" >> "$GITHUB_OUTPUT"
           fi
@@ -119,17 +126,12 @@ jobs:
           echo "is_dependabot=$(jq -r '.is_dependabot' meta.json)" >> "$GITHUB_OUTPUT"
 
       - name: Analyze Dependabot breaking changes (AI)
-        if: steps.ctx.outputs.event_type == 'opened'
+        if: steps.ctx.outputs.event_type == 'opened' && steps.ctx.outputs.is_dependabot == 'true'
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           MODEL: ${{ inputs.model }}
         run: |
           set -euo pipefail
-
-          if [[ "$(jq -r '.is_dependabot' meta.json)" != "true" ]]; then
-            echo '{"breaking_changes":[],"documentation_links":[]}' > ai.json
-            exit 0
-          fi
 
           SYSTEM="You analyze a Dependabot dependency pull request body. Emit STRICT JSON only with fields: breaking_changes (array of bullets — list EVERY major semver bump and known breaking API change; do not miss any), documentation_links (array of changelog, migration guide, and release-note URLs found in the body). Do not mention Slack, chat channels, notifications, or where output is displayed. Analyze only the PR content. English only. No markdown in string values."
 
@@ -191,12 +193,15 @@ jobs:
             def slack_code($s): "`" + $s + "`";
             def slack_codeblock($s): "```\n" + $s + "\n```";
             def slack_link_code($url; $s): "<" + $url + "|`" + $s + "`>";
+            def pr_header($label; $m):
+              ($label + " " + slack_link_code($m.url; $m.title + " #" + ($m.number | tostring)) + "\n" + slack_code($m.repo));
             def claude_ping($m):
-              "<@U0BAPTE85TL> Please review this Dependabot PR in " + slack_code($m.repo) + ": " +
-              "<" + $m.url + "|" + $m.title + " #" + ($m.number | tostring) + ">. " +
+              "<@U0BAPTE85TL> Please review this Dependabot PR: " +
+              slack_link_code($m.url; $m.title + " #" + ($m.number | tostring)) + ". " +
               "Assess breaking changes, security impact, and whether auto-merge is safe.";
             ($meta[0]) as $m |
             ($analysis[0]) as $a |
+            (if $m.is_dependabot then "🛄 New Dependabot PR" else "✳️ New PR" end) as $label |
             (if ($m.labels | length) > 0
               then ([$m.labels[] | "`" + . + "`"] | join(" "))
               else "_none_" end) as $tags |
@@ -208,45 +213,83 @@ jobs:
               else "_None_" end) as $breaking |
             (if $m.is_dependabot then "439FE0" else "2EB67D" end) as $accent |
             {
-              text: ("➔ New PR · " + $m.repo + " · " + $m.title + " #" + ($m.number | tostring) + " by @" + $m.author),
+              text: ($label + " " + $m.title + " #" + ($m.number | tostring)),
               attachments: [
-              { color: $accent, blocks: (
-                [
-                  { type: "section", text: { type: "mrkdwn", text:
-                    ("➔ New PR " + slack_link_code($m.url; $m.title + " #" + ($m.number | tostring)) + "\n" +
-                     slack_code($m.repo)) } },
-                  { type: "section", text: { type: "mrkdwn", text:
-                    ("*Status:* " + $m.status + "\n" +
-                     "*Opener:* `" + $m.author + "` · *Latest commit:* `" + $m.head_sha + "` · *Tags:* " + $tags + " · *Related issues:* " + $issues + "\n" +
-                     "*Commits:* " + ($m.commit_count | tostring) + "\n" +
-                     "*Files:* " + ($m.changed_files | tostring) + " changed · *Lines:* +" + ($m.additions | tostring) + " / −" + ($m.deletions | tostring)) } },
-                  { type: "divider" },
-                  { type: "section", text: { type: "mrkdwn",
-                    text: ("*Summary*\n" + (slack_codeblock($m.pr_summary))) } },
-                  { type: "section", text: { type: "mrkdwn",
-                    text: ("*Breaking changes*\n" + (slack_codeblock($breaking))) } }
-                ]
-                + (if (($a.breaking_changes | length) > 0) and (($a.documentation_links | length) > 0) then
-                    [{ type: "section", text: { type: "mrkdwn",
-                      text: ("*Documentation*\n" +
-                        ([$a.documentation_links[] | "- <" + . + "|" + . + ">"] | join("\n"))) } }]
-                  else [] end)
-                + (if $m.is_dependabot then
-                    [{ type: "section", text: { type: "mrkdwn",
-                      text: ("*Claude review*\n" + claude_ping($m)) } }]
-                  else [] end)
-                + [{ type: "actions", elements: [
-                    { type: "button", text: { type: "plain_text", text: "View PR" }, url: $m.url },
-                    { type: "button", text: { type: "plain_text", text: "Start review" },
-                      url: $m.review_url, style: "primary" }
-                  ]}]
-              ) }
-            ] }' > slack.json
+                { color: $accent, blocks: (
+                  [
+                    { type: "section", text: { type: "mrkdwn", text: pr_header($label; $m) } },
+                    { type: "section", text: { type: "mrkdwn", text:
+                      ("*Status:* " + $m.status + "\n" +
+                       "*Opener:* `" + $m.author + "` · *Latest commit:* `" + $m.head_sha + "` · *Tags:* " + $tags + " · *Related issues:* " + $issues + "\n" +
+                       "*Commits:* " + ($m.commit_count | tostring) + "\n" +
+                       "*Files:* " + ($m.changed_files | tostring) + " changed · *Lines:* +" + ($m.additions | tostring) + " / −" + ($m.deletions | tostring)) } },
+                    { type: "divider" },
+                    { type: "section", text: { type: "mrkdwn",
+                      text: ("*Summary*\n" + (slack_codeblock($m.pr_summary))) } },
+                    { type: "section", text: { type: "mrkdwn",
+                      text: ("*Breaking changes*\n" + (slack_codeblock($breaking))) } }
+                  ]
+                  + (if (($a.breaking_changes | length) > 0) and (($a.documentation_links | length) > 0) then
+                      [{ type: "section", text: { type: "mrkdwn",
+                        text: ("*Documentation*\n" +
+                          ([$a.documentation_links[] | "- <" + . + "|" + . + ">"] | join("\n"))) } }]
+                    else [] end)
+                  + (if $m.is_dependabot then
+                      [{ type: "section", text: { type: "mrkdwn",
+                        text: ("*Claude review*\n" + claude_ping($m)) } }]
+                    else [] end)
+                  + [{ type: "actions", elements: [
+                      { type: "button", text: { type: "plain_text", text: "View PR" }, url: $m.url },
+                      { type: "button", text: { type: "plain_text", text: "Start review" },
+                        url: $m.review_url, style: "primary" }
+                    ]}]
+                ) }
+              ]
+            }' > slack.json
 
           cat slack.json
 
       - name: Build Slack payload (merged)
         if: steps.ctx.outputs.event_type == 'merged'
+        env:
+          REPO_URL: ${{ github.event.repository.html_url }}
+          MERGED_BY: ${{ github.event.pull_request.merged_by.login }}
+        run: |
+          set -euo pipefail
+
+          jq -n \
+            --slurpfile meta meta.json \
+            --arg repo_url "$REPO_URL" \
+            --arg merged_by "$MERGED_BY" \
+            '
+            def slack_code($s): "`" + $s + "`";
+            def slack_link_code($url; $s): "<" + $url + "|`" + $s + "`>";
+            def pr_header($label; $m):
+              ($label + " " + slack_link_code($m.url; $m.title + " #" + ($m.number | tostring)) + "\n" + slack_code($m.repo));
+            ($meta[0]) as $m |
+            "💟 Merged PR" as $label |
+            (if $m.is_dependabot then "439FE0" else "9B59B6" end) as $accent |
+            {
+              text: ($label + " " + $m.title + " #" + ($m.number | tostring)),
+              attachments: [
+                { color: $accent, blocks: (
+                  [
+                    { type: "section", text: { type: "mrkdwn", text: pr_header($label; $m) } },
+                    { type: "section", text: { type: "mrkdwn",
+                      text: ("*Merged by:* `" + $merged_by + "` · *Files:* " + ($m.changed_files | tostring) + " changed · *Lines:* +" + ($m.additions | tostring) + " / −" + ($m.deletions | tostring)) } },
+                    { type: "actions", elements: [
+                      { type: "button", text: { type: "plain_text", text: "View repo" }, url: $repo_url },
+                      { type: "button", text: { type: "plain_text", text: "View PR" }, url: $m.url, style: "primary" }
+                    ]}
+                  ]
+                ) }
+              ]
+            }' > slack.json
+
+          cat slack.json
+
+      - name: Build Slack payload (closed)
+        if: steps.ctx.outputs.event_type == 'closed'
         env:
           REPO_URL: ${{ github.event.repository.html_url }}
         run: |
@@ -258,23 +301,27 @@ jobs:
             '
             def slack_code($s): "`" + $s + "`";
             def slack_link_code($url; $s): "<" + $url + "|`" + $s + "`>";
+            def pr_header($label; $m):
+              ($label + " " + slack_link_code($m.url; $m.title + " #" + ($m.number | tostring)) + "\n" + slack_code($m.repo));
             ($meta[0]) as $m |
-            (if $m.is_dependabot then "439FE0" else "9B59B6" end) as $accent |
+            "📛 Closed PR" as $label |
+            (if $m.is_dependabot then "439FE0" else "CB2431" end) as $accent |
             {
-              text: ("⤴ Merged · " + $m.repo + " · " + $m.title + " #" + ($m.number | tostring)),
+              text: ($label + " " + $m.title + " #" + ($m.number | tostring)),
               attachments: [
-              { color: $accent, blocks: (
-                [
-                  { type: "section", text: { type: "mrkdwn",
-                    text: ("⤴ Merged PR " + slack_link_code($m.url; $m.title + " #" + ($m.number | tostring)) + "\n" +
-                      slack_code($m.repo)) } },
-                  { type: "actions", elements: [
-                    { type: "button", text: { type: "plain_text", text: "View repo" }, url: $repo_url },
-                    { type: "button", text: { type: "plain_text", text: "View PR" }, url: $m.url, style: "primary" }
-                  ]}
-                ]
-              ) }
-            ] }' > slack.json
+                { color: $accent, blocks: (
+                  [
+                    { type: "section", text: { type: "mrkdwn", text: pr_header($label; $m) } },
+                    { type: "section", text: { type: "mrkdwn",
+                      text: ("*Closed by:* `" + $m.closed_by + "` · *Opener:* `" + $m.author + "`") } },
+                    { type: "actions", elements: [
+                      { type: "button", text: { type: "plain_text", text: "View repo" }, url: $repo_url },
+                      { type: "button", text: { type: "plain_text", text: "View PR" }, url: $m.url, style: "primary" }
+                    ]}
+                  ]
+                ) }
+              ]
+            }' > slack.json
 
           cat slack.json
 
@@ -331,6 +378,8 @@ jobs:
 
           if [[ "$EVENT_TYPE" == "merged" ]]; then
             EMOJI="white_check_mark"
+          elif [[ "$EVENT_TYPE" == "closed" ]]; then
+            EMOJI="x"
           elif [[ "$(jq -r '.is_dependabot' meta.json)" == "true" ]]; then
             EMOJI="package"
           else
