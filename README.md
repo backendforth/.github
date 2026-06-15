@@ -8,27 +8,31 @@ Org-wide GitHub Actions reusable workflows for Slack PR notifications.
 
 **On open** — fixed English template (always the same sections):
 
-1. `➔ New PR` label
-2. `➔` PR title `#number`
-2. Status: `Open` / `Conflicts`
-3. Opener · latest commit · tags · related issues
-4. Commit count
-5. Files changed · lines added/deleted
-6. Summary (AI)
-7. Breaking changes (always shown; `_None_` if empty)
-8. Documentation (only when breaking changes exist and links were found)
-9. View PR · Start review
+1. `➔ New PR` label (code backticks)
+2. `➔` PR title `#number` (code backticks)
+3. Status: `Open` / `Conflicts`
+4. Opener · latest commit · tags · related issues
+5. Commit count
+6. Files changed · lines added/deleted
+7. **Summary** — extracted from the PR body (`## Summary`, else `## Description`, else first paragraph); shown in a code block. Not AI-generated.
+8. **Breaking changes** — always shown (`_None_` if empty); code block
+9. **Documentation** — only when breaking changes exist and links were found (Dependabot focus)
+10. View PR · Start review
 
-**Dependabot PRs:** AI prompt prioritizes breaking changes and documentation links. A deterministic pass also scans the PR body for major semver bumps (`from X.x.x to Y.x.x` where Y > X) and extracts `https` URLs, merged with the AI output.
+Messages are wrapped with leading/trailing dividers and a `repo · PR #N` context line for separation in busy channels.
 
-**On merge** — compact line only:
+**Dependabot PRs:** OpenRouter analyzes breaking changes and documentation links only (prompts never reference Slack or notification channels). A deterministic pass also scans the PR body for major semver bumps and `https` URLs, merged with the AI output.
+
+**On merge** — compact card with code labels:
 
 ```
 ⤴ Merged PR
-⤴ PR #123 by `author`
+⤴ PR #123 by author
 PR title (linked)
 [View repo] [View PR]
 ```
+
+Also wrapped with dividers and repo context.
 
 #### Caller (per repo)
 

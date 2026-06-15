@@ -106,7 +106,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          SYSTEM='Write a monthly GitHub PR digest. Input JSON lists all PRs opened/closed in the period with author kinds (Human, Dependabot, Bot) and co-author tools (Cursor, Claude, Copilot). Emit STRICT JSON: executive_summary (3-5 sentences), highlights (array of bullets with #number), contributors (array of bullets: humans by login, bot activity, co-author tools), dependency_notes (string about Dependabot/breaking upgrades, or empty). English only. No markdown in values.'
+          SYSTEM='Write a monthly GitHub PR digest. Input JSON lists all PRs opened/closed in the period with author kinds (Human, Dependabot, Bot) and co-author tools (Cursor, Claude, Copilot). Emit STRICT JSON: executive_summary (3-5 sentences), highlights (array of bullets with #number), contributors (array of bullets: humans by login, bot activity, co-author tools), dependency_notes (string about Dependabot/breaking upgrades, or empty). English only. No markdown in values. Do not mention Slack, chat channels, notifications, or where output is displayed.'
 
           PAYLOAD=$(jq -n --arg system "$SYSTEM" --slurpfile ctx digest-context.json --arg model "$MODEL" \
             '{model: $model, response_format: {type: "json_object"}, messages: [{role: "system", content: $system}, {role: "user", content: ($ctx[0] | tostring)}]}')
