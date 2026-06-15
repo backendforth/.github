@@ -8,31 +8,23 @@ Org-wide GitHub Actions reusable workflows for Slack PR notifications.
 
 **On open** — fixed English template (always the same sections):
 
-1. `➔ New PR · owner/repo` label (code backticks)
-2. `➔` PR title `#number` (code backticks)
-3. Status: `Open` / `Conflicts`
-4. Opener · latest commit · tags · related issues
-5. Commit count
-6. Files changed · lines added/deleted
-7. **Summary** — extracted from the PR body (`## Summary`, else `## Description`, else first paragraph); shown in a code block. Not AI-generated.
-8. **Breaking changes** — always shown (`_None_` if empty); code block
-9. **Documentation** — only when breaking changes exist and links were found (Dependabot focus)
-10. View PR · Start review
+1. `➔ New PR · owner/repo` (code backticks, green attachment bar)
+2. `➔` PR title `#number` (code backticks, linked to PR)
+3. Status · opener · commit · tags · issues · files · lines
+4. **Summary** — from PR body (`## Summary` …), code block, not AI
+5. **Breaking changes** — always shown; code block
+6. **Documentation** — only when breaking changes + links exist
+7. View PR · Start review
 
-Messages are wrapped with leading/trailing dividers and a `repo · PR #N` context line for separation in busy channels.
+Green (`#2EB67D`) left bar via Slack attachment. Dividers top/bottom for separation.
 
-**Dependabot PRs:** OpenRouter analyzes breaking changes and documentation links only (prompts never reference Slack or notification channels). A deterministic pass also scans the PR body for major semver bumps and `https` URLs, merged with the AI output.
-
-**On merge** — compact card with code labels:
+**On merge** — compact card, purple (`#9B59B6`) attachment bar:
 
 ```
 ⤴ Merged PR · owner/repo
-⤴ PR #123 by author
-PR title (linked)
+⤴ PR title #123 (linked)
 [View repo] [View PR]
 ```
-
-Also wrapped with dividers and repo context.
 
 #### Caller (per repo)
 
