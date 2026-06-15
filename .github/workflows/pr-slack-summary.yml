@@ -12,6 +12,10 @@ on:
         required: true
       SLACK_CLAUDE_USER_ID:
         required: false
+      SLACK_BOT_TOKEN:
+        required: false
+      SLACK_CHANNEL_ID:
+        required: false
     inputs:
       model:
         type: string
@@ -114,6 +118,8 @@ jobs:
             echo "event_type=opened" >> "$GITHUB_OUTPUT"
           fi
 
+          echo "is_dependabot=$(jq -r '.is_dependabot' meta.json)" >> "$GITHUB_OUTPUT"
+
       - name: Analyze Dependabot breaking changes (AI)
         if: steps.ctx.outputs.event_type == 'opened'
         env:
@@ -177,33 +183,16 @@ jobs:
 
       - name: Build Slack payload (opened)
         if: steps.ctx.outputs.event_type == 'opened'
-        env:
-          SLACK_CLAUDE_USER_ID: ${{ secrets.SLACK_CLAUDE_USER_ID }}
         run: |
           set -euo pipefail
 
           jq -n \
             --slurpfile meta meta.json \
             --slurpfile analysis analysis.json \
-            --arg claude_id "${SLACK_CLAUDE_USER_ID}" \
             '
             def slack_code($s): "`" + $s + "`";
             def slack_codeblock($s): "```\n" + $s + "\n```";
             def slack_link_code($url; $s): "<" + $url + "|`" + $s + "`>";
-            def claude_mention($id):
-              if ($id | length) == 0 then ""
-              elif ($id | test("^<@[^>]+>$")) then $id
-              else "<@" + $id + ">"
-              end;
-            def claude_review($m; $id):
-              if ($id | length) == 0 then ""
-              else
-                claude_mention($id) + " Please review this Dependabot PR in " + slack_code($m.repo) + ": " +
-                "<" + $m.url + "|" + $m.title + " #" + ($m.number | tostring) + ">. " +
-                "Use your connected GitHub access to inspect the diff and release notes. " +
-                "Assess breaking changes, security impact, and whether auto-merge is safe. " +
-                "Reply in this thread with your recommendation."
-              end;
             ($meta[0]) as $m |
             ($analysis[0]) as $a |
             (if ($m.labels | length) > 0
@@ -238,17 +227,11 @@ jobs:
                       text: ("*Documentation*\n" +
                         ([$a.documentation_links[] | "- <" + . + "|" + . + ">"] | join("\n"))) } }]
                   else [] end)
-                + (if $m.is_dependabot and (($claude_id | length) > 0) then
-                    [{ type: "section", text: { type: "mrkdwn",
-                      text: ("*Claude review*\n" + claude_review($m; $claude_id)) } }]
-                  else [] end)
                 + [{ type: "actions", elements: [
                     { type: "button", text: { type: "plain_text", text: "View PR" }, url: $m.url },
                     { type: "button", text: { type: "plain_text", text: "Start review" },
                       url: $m.review_url, style: "primary" }
                   ]}]
-                + [{ type: "section", text: { type: "mrkdwn",
-                    text: "@Claude look at this PR and give us a short estimation" } }]
               ) }
             ] }' > slack.json
 
@@ -291,3 +274,76 @@ jobs:
           webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
           webhook-type: incoming-webhook
           payload-file-path: ./slack.json
+
+      - name: Ping Claude on Dependabot PR
+        if: steps.ctx.outputs.event_type == 'opened' && steps.ctx.outputs.is_dependabot == 'true'
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          SLACK_CHANNEL_ID: ${{ secrets.SLACK_CHANNEL_ID }}
+          SLACK_CLAUDE_USER_ID: ${{ secrets.SLACK_CLAUDE_USER_ID }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${SLACK_BOT_TOKEN}" || -z "${SLACK_CHANNEL_ID}" ]]; then
+            echo "Skipping Claude ping (set SLACK_BOT_TOKEN + SLACK_CHANNEL_ID to enable)."
+            exit 0
+          fi
+
+          resolve_claude_id() {
+            local cursor="" response id
+            while true; do
+              local url="https://slack.com/api/users.list?limit=200"
+              [[ -n "$cursor" ]] && url="${url}&cursor=${cursor}"
+              response=$(curl -sS -H "Authorization: Bearer ${SLACK_BOT_TOKEN}" "$url")
+              if [[ "$(echo "$response" | jq -r '.ok')" != "true" ]]; then
+                echo "users.list failed: $(echo "$response" | jq -r '.error')" >&2
+                return 1
+              fi
+              id=$(echo "$response" | jq -r '
+                .members[]? |
+                select(
+                  ((.name // "") | ascii_downcase) == "claude" or
+                  ((.profile.display_name // "") | ascii_downcase) == "claude" or
+                  ((.real_name // "") | ascii_downcase) == "claude"
+                ) | .id' | head -1)
+              if [[ -n "$id" && "$id" != "null" ]]; then
+                echo "$id"
+                return 0
+              fi
+              cursor=$(echo "$response" | jq -r '.response_metadata.next_cursor // empty')
+              [[ -z "$cursor" ]] && break
+            done
+            return 1
+          }
+
+          CLAUDE_ID="${SLACK_CLAUDE_USER_ID}"
+          CLAUDE_ID="${CLAUDE_ID#<@}"
+          CLAUDE_ID="${CLAUDE_ID%>}"
+          if [[ -z "$CLAUDE_ID" ]]; then
+            CLAUDE_ID="$(resolve_claude_id)" || {
+              echo "Could not resolve @Claude user ID (set SLACK_CLAUDE_USER_ID to override)." >&2
+              exit 0
+            }
+          fi
+
+          TEXT=$(jq -r \
+            --arg id "$CLAUDE_ID" \
+            --slurpfile meta meta.json \
+            '"<@" + $id + "> Please review this Dependabot PR in `" + .[0].repo + "`: <" + .[0].url + "|" + .[0].title + " #" + (.[0].number | tostring) + ">. Assess breaking changes, security impact, and whether auto-merge is safe."')
+
+          PAYLOAD=$(jq -n \
+            --arg channel "$SLACK_CHANNEL_ID" \
+            --arg text "$TEXT" \
+            '{channel: $channel, text: $text, unfurl_links: true, link_names: true}')
+
+          RESPONSE=$(curl -sS -X POST https://slack.com/api/chat.postMessage \
+            -H "Authorization: Bearer ${SLACK_BOT_TOKEN}" \
+            -H "Content-Type: application/json; charset=utf-8" \
+            -d "$PAYLOAD")
+
+          if [[ "$(echo "$RESPONSE" | jq -r '.ok')" != "true" ]]; then
+            echo "chat.postMessage failed: $(echo "$RESPONSE" | jq -r '.error')" >&2
+            exit 1
+          fi
+
+          echo "Claude ping posted."
