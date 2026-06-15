@@ -10,8 +10,6 @@ on:
         required: true
       OPENROUTER_API_KEY:
         required: true
-      SLACK_CLAUDE_USER_ID:
-        required: false
     inputs:
       model:
         type: string
@@ -179,30 +177,20 @@ jobs:
 
       - name: Build Slack payload (opened)
         if: steps.ctx.outputs.event_type == 'opened'
-        env:
-          SLACK_CLAUDE_USER_ID: ${{ secrets.SLACK_CLAUDE_USER_ID }}
         run: |
           set -euo pipefail
-
-          CLAUDE_ID="${SLACK_CLAUDE_USER_ID}"
-          CLAUDE_ID="${CLAUDE_ID#<@}"
-          CLAUDE_ID="${CLAUDE_ID%>}"
 
           jq -n \
             --slurpfile meta meta.json \
             --slurpfile analysis analysis.json \
-            --arg claude_id "$CLAUDE_ID" \
             '
             def slack_code($s): "`" + $s + "`";
             def slack_codeblock($s): "```\n" + $s + "\n```";
             def slack_link_code($url; $s): "<" + $url + "|`" + $s + "`>";
-            def claude_ping($m; $id):
-              if ($id | length) == 0 then ""
-              else
-                "<@" + $id + "> Please review this Dependabot PR in " + slack_code($m.repo) + ": " +
-                "<" + $m.url + "|" + $m.title + " #" + ($m.number | tostring) + ">. " +
-                "Assess breaking changes, security impact, and whether auto-merge is safe."
-              end;
+            def claude_ping($m):
+              "<@U0BAPTE85TL> Please review this Dependabot PR in " + slack_code($m.repo) + ": " +
+              "<" + $m.url + "|" + $m.title + " #" + ($m.number | tostring) + ">. " +
+              "Assess breaking changes, security impact, and whether auto-merge is safe.";
             ($meta[0]) as $m |
             ($analysis[0]) as $a |
             (if ($m.labels | length) > 0
@@ -237,9 +225,9 @@ jobs:
                       text: ("*Documentation*\n" +
                         ([$a.documentation_links[] | "- <" + . + "|" + . + ">"] | join("\n"))) } }]
                   else [] end)
-                + (if $m.is_dependabot and (($claude_id | length) > 0) then
+                + (if $m.is_dependabot then
                     [{ type: "section", text: { type: "mrkdwn",
-                      text: ("*Claude review*\n" + claude_ping($m; $claude_id)) } }]
+                      text: ("*Claude review*\n" + claude_ping($m)) } }]
                   else [] end)
                 + [{ type: "actions", elements: [
                     { type: "button", text: { type: "plain_text", text: "View PR" }, url: $m.url },
