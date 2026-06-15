@@ -68,7 +68,11 @@ jobs:
 
 | Secret | Purpose |
 |---|---|
-| `SLACK_WEBHOOK_URL` | Incoming Webhook → `#github-logs` |
+| `SLACK_WEBHOOK_URL` | Incoming Webhook → `#github-logs` (fallback when no bot token) |
 | `OPENROUTER_API_KEY` | Dependabot breaking-change analysis |
+| `SLACK_BOT_TOKEN` | Optional — `xoxb-…` with `chat:write` + `reactions:write` (posts + emoji reactions) |
+| `SLACK_CHANNEL_ID` | Optional — `#github-logs` channel ID (`C…`) |
+
+When `SLACK_BOT_TOKEN` and `SLACK_CHANNEL_ID` are set, messages post via `chat.postMessage` and get an emoji reaction: `:eyes:` (new PR), `:package:` (Dependabot), `:white_check_mark:` (merged). With webhook only, posting works but reactions do not (webhooks do not return a message timestamp).
 
 Scope: all enrolled repos (`next-sanity-starter`, `bef-website-2026`, `farbstudio.de`, `mammalsandcomputers`).
