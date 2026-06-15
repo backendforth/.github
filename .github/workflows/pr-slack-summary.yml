@@ -50,12 +50,12 @@ jobs:
             ($p.body // "") as $raw |
             ($raw | gsub("<!--[\\s\\S]*?-->"; "")) as $body |
             (if ($body | test("(?i)##[[:space:]]*Summary")) then
-              ($body | split("## Summary")[1] // $body | split("## summary")[1] // "" | split("\n##")[0] | gsub("^[[:space:]]+|[[:space:]]+$"; ""))
+              (($body | split("## Summary")[1]) // ($body | split("## summary")[1]) // "" | split("\n##")[0] | gsub("^[[:space:]]+|[[:space:]]+$"; ""))
             elif ($body | test("(?i)##[[:space:]]*Description")) then
-              ($body | split("## Description")[1] // $body | split("## description")[1] // "" | split("\n##")[0] | gsub("^[[:space:]]+|[[:space:]]+$"; ""))
+              (($body | split("## Description")[1]) // ($body | split("## description")[1]) // "" | split("\n##")[0] | gsub("^[[:space:]]+|[[:space:]]+$"; ""))
             else
               ($body | split("\n\n")[0] // "")
-            end | gsub("^[[:space:]\n]+|[[:space:]\n]+$"; "")) as $summary_raw |
+            end // "" | gsub("^[[:space:]\n]+|[[:space:]\n]+$"; "")) as $summary_raw |
             ([$p.closingIssuesReferences[]? | "#\(.number)"] +
               ([$body | scan("#[0-9]+")] | unique)) as $issue_refs |
             (if $p.mergeStateStatus == "DIRTY" then "Conflicts"
@@ -202,7 +202,7 @@ jobs:
                 ]}]
               + [
                 { type: "section", text: { type: "mrkdwn", text:
-                  (slack_code("➔ New PR") + "\n" +
+                  (slack_code("➔ New PR · " + $m.repo) + "\n" +
                    slack_code("➔ " + $m.title) + " <" + $m.url + "|#" + ($m.number | tostring) + ">\n" +
                    "*Status:* " + $m.status + "\n" +
                    "*Opener:* `" + $m.author + "` · *Latest commit:* `" + $m.head_sha + "` · *Tags:* " + $tags + " · *Related issues:* " + $issues + "\n" +
@@ -257,7 +257,7 @@ jobs:
                 ]}]
               + [
                 { type: "section", text: { type: "mrkdwn",
-                  text: (slack_code("⤴ Merged PR") + "\n" +
+                  text: (slack_code("⤴ Merged PR · " + $repo) + "\n" +
                     slack_code("⤴ PR #" + $number + " by " + $author) + "\n" +
                     "<" + $url + "|" + $title + ">") } },
                 { type: "actions", elements: [
