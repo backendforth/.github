@@ -207,7 +207,9 @@ jobs:
               then ([$a.breaking_changes[] | "- " + .] | join("\n"))
               else "_None_" end) as $breaking |
             (if $m.is_dependabot then "439FE0" else "2EB67D" end) as $accent |
-            { attachments: [
+            {
+              text: ("➔ New PR · " + $m.repo + " · " + $m.title + " #" + ($m.number | tostring) + " by @" + $m.author),
+              attachments: [
               { color: $accent, blocks: (
                 [
                   { type: "section", text: { type: "mrkdwn", text:
@@ -258,7 +260,9 @@ jobs:
             def slack_link_code($url; $s): "<" + $url + "|`" + $s + "`>";
             ($meta[0]) as $m |
             (if $m.is_dependabot then "439FE0" else "9B59B6" end) as $accent |
-            { attachments: [
+            {
+              text: ("⤴ Merged · " + $m.repo + " · " + $m.title + " #" + ($m.number | tostring)),
+              attachments: [
               { color: $accent, blocks: (
                 [
                   { type: "section", text: { type: "mrkdwn",
