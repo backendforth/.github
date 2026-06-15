@@ -1,24 +1,11 @@
 name: PR → Slack summary
 
-# Reusable workflow: posts an AI-summarized Slack message for every PR
-# opened, marked ready-for-review, or merged. Skips drafts and fork PRs
-# (the latter because GitHub denies secrets to fork-triggered workflows).
+# Reusable workflow: posts an AI-summarized Slack message when a PR opens,
+# and a compact status-only message when it merges. Skips drafts and fork PRs.
 #
-# Called from each repo via:
-#
-#   on:
-#     pull_request:
-#       types: [opened, ready_for_review, closed]
-#       branches: [main]   # add other long-lived branches as needed
-#
-#   jobs:
-#     notify:
-#       uses: backendforth/.github/.github/workflows/pr-slack-summary.yml@main
-#       secrets: inherit
-#
-# Required org secrets (Settings → Secrets and variables → Actions):
-#   - SLACK_WEBHOOK_URL    Incoming Webhook pointed at the target channel
-#   - OPENROUTER_API_KEY   from openrouter.ai/keys (set a credit cap there)
+# Lifecycle:
+#   opened / ready_for_review → one message: title, summary, status "Offen"
+#   merged                    → short status line only (no second AI call)
 
 on:
   workflow_call:
@@ -35,7 +22,7 @@ on:
 
 permissions:
   contents: read
-  pull-requests: read
+  pull-requests: write
 
 jobs:
   notify:
@@ -74,20 +61,13 @@ jobs:
             }' > context.json
 
           if [[ "${{ github.event.action }}" == "closed" ]]; then
-            {
-              echo "event_type=merged"
-              echo "header_emoji=✅"
-              echo "header_text=Merged"
-            } >> "$GITHUB_OUTPUT"
+            echo "event_type=merged" >> "$GITHUB_OUTPUT"
           else
-            {
-              echo "event_type=opened"
-              echo "header_emoji=📥"
-              echo "header_text=New PR"
-            } >> "$GITHUB_OUTPUT"
+            echo "event_type=opened" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Generate AI summary via OpenRouter
+        if: steps.ctx.outputs.event_type == 'opened'
         id: ai
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
@@ -110,7 +90,6 @@ jobs:
               ]
             }')
 
-          # Retry up to 3 times on 5xx
           for attempt in 1 2 3; do
             HTTP_CODE=$(curl -sS -o response.json -w '%{http_code}' \
               https://openrouter.ai/api/v1/chat/completions \
@@ -137,8 +116,6 @@ jobs:
           done
 
           CONTENT=$(jq -r '.choices[0].message.content' response.json)
-
-          # Strip accidental markdown code fences (just in case)
           CONTENT=$(printf '%s' "$CONTENT" | sed -E 's/^```(json)?//; s/```$//')
 
           if printf '%s' "$CONTENT" | jq empty 2>/dev/null; then
@@ -149,7 +126,6 @@ jobs:
               '{summary: $s, breaking_changes: [], risk: "low"}' > ai.json
           fi
 
-          # Defensive defaults if fields are missing
           jq '{
             summary: (.summary // "No summary available."),
             breaking_changes: (.breaking_changes // []),
@@ -157,49 +133,70 @@ jobs:
           }' ai.json > ai.final.json
           mv ai.final.json ai.json
 
-      - name: Build Slack Block Kit payload
+      - name: Build Slack payload (opened)
+        if: steps.ctx.outputs.event_type == 'opened'
         env:
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_URL: ${{ github.event.pull_request.html_url }}
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
           REPO_NAME: ${{ github.event.repository.name }}
-          IS_MERGED: ${{ github.event.pull_request.merged }}
-          HEADER_EMOJI: ${{ steps.ctx.outputs.header_emoji }}
-          HEADER_TEXT: ${{ steps.ctx.outputs.header_text }}
         run: |
           set -euo pipefail
 
           jq -n \
-            --arg header "$HEADER_EMOJI $HEADER_TEXT · $REPO_NAME" \
             --arg title "$PR_TITLE" \
             --arg url "$PR_URL" \
             --arg author "$PR_AUTHOR" \
-            --arg is_merged "$IS_MERGED" \
+            --arg repo "$REPO_NAME" \
             --slurpfile ai ai.json \
             '
             ($ai[0]) as $ai |
-            ($is_merged == "true") as $merged |
             { blocks:
-              ([
-                { type: "header", text: { type: "plain_text", text: $header, emoji: true } },
+              [
                 { type: "section", text: { type: "mrkdwn",
-                  text: ("*<" + $url + "|" + $title + ">*\nby `" + $author + "`") } },
-                { type: "section", text: { type: "mrkdwn",
-                  text: ("*Zusammenfassung*\n" + $ai.summary) } }
+                  text: ("*<" + $url + "|" + $title + ">*\n`" + $repo + "` · `" + $author + "`") } },
+                { type: "divider" },
+                { type: "section", text: { type: "mrkdwn", text: $ai.summary } }
               ]
               + (if ($ai.breaking_changes | length) > 0 then
                   [{ type: "section", text: { type: "mrkdwn",
                     text: ("⚠️ *Breaking changes*\n" +
                       ([$ai.breaking_changes[] | "• " + .] | join("\n"))) } }]
                 else [] end)
-              + (if $merged then [] else
-                  [{ type: "actions", elements: [
-                    { type: "button",
-                      text: { type: "plain_text", text: "Review PR →" },
-                      url: $url, style: "primary" }
-                  ]}]
-                end))
+              + [
+                { type: "context", elements: [
+                  { type: "mrkdwn", text: "📥 *Status:* Offen" }
+                ] },
+                { type: "actions", elements: [
+                  { type: "button",
+                    text: { type: "plain_text", text: "Review PR →" },
+                    url: $url, style: "primary" }
+                ] }
+              ]
             }' > slack.json
+
+          cat slack.json
+
+      - name: Build Slack payload (merged)
+        if: steps.ctx.outputs.event_type == 'merged'
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          REPO_NAME: ${{ github.event.repository.name }}
+        run: |
+          set -euo pipefail
+
+          jq -n \
+            --arg title "$PR_TITLE" \
+            --arg url "$PR_URL" \
+            --arg author "$PR_AUTHOR" \
+            --arg repo "$REPO_NAME" \
+            '{ blocks: [
+              { type: "section", text: { type: "mrkdwn",
+                text: ("✅ *Status:* Gemerged · `"
+                  + $repo + "` · <" + $url + "|" + $title + "> · `" + $author + "`") } }
+            ] }' > slack.json
 
           cat slack.json
 
