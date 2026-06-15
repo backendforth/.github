@@ -229,6 +229,8 @@ jobs:
                     [{ type: "section", text: { type: "mrkdwn",
                       text: ("*Claude review*\n" + claude_ping($m)) } }]
                   else [] end)
+                + [{ type: "section", text: { type: "mrkdwn",
+                    text: ("*Claude test ping*\n<@U0BAPTE85TL> look at this PR and give us a short estimation.") } }]
                 + [{ type: "actions", elements: [
                     { type: "button", text: { type: "plain_text", text: "View PR" }, url: $m.url },
                     { type: "button", text: { type: "plain_text", text: "Start review" },
