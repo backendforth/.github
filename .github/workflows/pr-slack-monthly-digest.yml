@@ -1,0 +1,160 @@
+name: PR monthly Slack digest
+
+# Posts a monthly overview of PRs opened/closed in the previous calendar month.
+
+on:
+  workflow_call:
+    secrets:
+      SLACK_WEBHOOK_URL:
+        required: true
+      OPENROUTER_API_KEY:
+        required: true
+    inputs:
+      model:
+        type: string
+        default: "google/gemini-3.1-flash-lite"
+        description: "OpenRouter model slug"
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Collect last month PRs
+        id: collect
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          START=$(date -u -d "$(date -u +%Y-%m-01) -1 month" +%Y-%m-01)
+          END=$(date -u -d "$(date -u +%Y-%m-01) -1 day" +%Y-%m-%d)
+          MONTH_LABEL=$(date -u -d "$START" +%B\ %Y)
+
+          echo "month_label=$MONTH_LABEL" >> "$GITHUB_OUTPUT"
+          echo "period=$START..$END" >> "$GITHUB_OUTPUT"
+
+          gh search prs --repo "$GH_REPO" --created "$START..$END" --limit 100 \
+            --json number,title,state,author,createdAt,closedAt,mergedAt,additions,deletions,changedFiles,labels,commits \
+            > prs-created.json 2>/dev/null || echo '[]' > prs-created.json
+
+          gh search prs --repo "$GH_REPO" --closed "$START..$END" --limit 100 \
+            --json number,title,state,author,createdAt,closedAt,mergedAt,additions,deletions,changedFiles,labels,commits \
+            > prs-closed.json 2>/dev/null || echo '[]' > prs-closed.json
+
+          jq -s 'add | unique_by(.number) |
+            map({
+              number, title, state,
+              author: .author.login,
+              labels: [.labels[]?.name],
+              additions, deletions, changedFiles,
+              merged: .mergedAt,
+              co_authors: ([.commits[]?.message | scan("Co-authored-by: ([^<\\n]+)")] | flatten | unique)
+            })' prs-created.json prs-closed.json > digest-data.json
+
+          COUNT=$(jq 'length' digest-data.json)
+          echo "pr_count=$COUNT" >> "$GITHUB_OUTPUT"
+          [[ "$COUNT" -eq 0 ]] && echo "skip=true" >> "$GITHUB_OUTPUT" && exit 0
+
+          jq '
+            [.[] | . + {author_kind: (
+              if (.author | test("dependabot"; "i")) then "Dependabot"
+              elif (.author | test("\\[bot\\]$")) then "Bot"
+              else "Human" end)}]
+            | group_by(.author_kind)
+            | map({kind: .[0].author_kind, count: length, prs: map("#" + (.number | tostring))})
+          ' digest-data.json > by-author-kind.json
+
+          jq '
+            [.[].co_authors[]? | gsub("^\\s+|\\s+$";"")]
+            | map(if test("Cursor"; "i") then "Cursor"
+                  elif test("Claude"; "i") then "Claude"
+                  elif test("Copilot"; "i") then "Copilot"
+                  else empty end)
+            | group_by(.) | map({tool: .[0], count: length})
+          ' digest-data.json > by-tool.json
+
+          jq -n \
+            --arg repo "$GH_REPO" --arg month "$MONTH_LABEL" \
+            --arg start "$START" --arg end "$END" \
+            --slurpfile prs digest-data.json \
+            --slurpfile authors by-author-kind.json \
+            --slurpfile tools by-tool.json \
+            '{
+              repo: $repo, month: $month,
+              period: {start: $start, end: $end},
+              prs: $prs[0],
+              by_author_kind: $authors[0],
+              by_tool: $tools[0],
+              totals: {
+                prs: ($prs[0] | length),
+                merged: ([$prs[0][] | select(.merged != null)] | length),
+                additions: ([$prs[0][].additions] | add // 0),
+                deletions: ([$prs[0][].deletions] | add // 0)
+              }
+            }' > digest-context.json
+
+      - name: Generate monthly summary
+        if: steps.collect.outputs.skip != 'true'
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          MODEL: ${{ inputs.model }}
+        run: |
+          set -euo pipefail
+
+          SYSTEM='Write a monthly GitHub PR digest. Input JSON lists all PRs opened/closed in the period with author kinds (Human, Dependabot, Bot) and co-author tools (Cursor, Claude, Copilot). Emit STRICT JSON: executive_summary (3-5 sentences), highlights (array of bullets with #number), contributors (array of bullets: humans by login, bot activity, co-author tools), dependency_notes (string about Dependabot/breaking upgrades, or empty). English only. No markdown in values.'
+
+          PAYLOAD=$(jq -n --arg system "$SYSTEM" --slurpfile ctx digest-context.json --arg model "$MODEL" \
+            '{model: $model, response_format: {type: "json_object"}, messages: [{role: "system", content: $system}, {role: "user", content: ($ctx[0] | tostring)}]}')
+
+          HTTP_CODE=$(curl -sS -o response.json -w '%{http_code}' \
+            https://openrouter.ai/api/v1/chat/completions \
+            -H "Authorization: Bearer $OPENROUTER_API_KEY" \
+            -H "Content-Type: application/json" \
+            -H "HTTP-Referer: https://github.com/backendforth" \
+            -H "X-Title: PR Monthly Digest" \
+            -d "$PAYLOAD")
+          [[ "$HTTP_CODE" == "200" ]] || (cat response.json && exit 1)
+
+          jq -r '.choices[0].message.content' response.json | sed -E 's/^```(json)?//; s/```$//' | \
+            jq '{executive_summary, highlights, contributors, dependency_notes}' > ai.json
+
+      - name: Build Slack digest
+        env:
+          MONTH_LABEL: ${{ steps.collect.outputs.month_label }}
+          SKIP: ${{ steps.collect.outputs.skip }}
+        run: |
+          set -euo pipefail
+          REPO="${{ github.repository }}"
+
+          if [[ "$SKIP" == "true" ]]; then
+            jq -n --arg repo "$REPO" --arg month "$MONTH_LABEL" \
+              '{blocks: [{type: "section", text: {type: "mrkdwn", text: ("*Monthly digest · " + ($repo | split("/")[1]) + " · " + $month + "*\n_No PRs opened or closed in this period._")}}]}' > slack.json
+          else
+            jq -n --arg repo "$REPO" --arg month "$MONTH_LABEL" \
+              --slurpfile ctx digest-context.json --slurpfile ai ai.json \
+              '($ctx[0]) as $c | ($ai[0]) as $ai | ($c.totals) as $t |
+              {blocks: [
+                {type: "header", text: {type: "plain_text", text: ("Monthly digest · " + ($repo | split("/")[1]) + " · " + $month), emoji: true}},
+                {type: "section", text: {type: "mrkdwn", text: ("*" + ($t.prs|tostring) + " PRs* · *" + ($t.merged|tostring) + " merged* · *+" + ($t.additions|tostring) + " / −" + ($t.deletions|tostring) + "* lines")}},
+                {type: "divider"},
+                {type: "section", text: {type: "mrkdwn", text: ("*Overview*\n" + $ai.executive_summary)}},
+                {type: "section", text: {type: "mrkdwn", text: ("*Highlights*\n" + ([$ai.highlights[]? | "- " + .] | join("\n")))}},
+                {type: "section", text: {type: "mrkdwn", text: ("*Contributors*\n" + ([$ai.contributors[]? | "- " + .] | join("\n")))}}
+              ]
+              + (if ($ai.dependency_notes | length) > 0 then
+                  [{type: "section", text: {type: "mrkdwn", text: ("*Dependencies*\n" + $ai.dependency_notes)}}] else [] end)
+              + [{type: "section", text: {type: "mrkdwn", text: ("*PR index*\n" + ([$c.prs[] | "• <https://github.com/" + $repo + "/pull/" + (.number|tostring) + "|#" + (.number|tostring) + "> " + .title + " — `" + .author + "` (" + .state + ")"] | join("\n")))}}]}' > slack.json
+          fi
+          cat slack.json
+
+      - name: Post to Slack
+        uses: slackapi/slack-github-action@v2
+        with:
+          webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
+          webhook-type: incoming-webhook
+          payload-file-path: ./slack.json

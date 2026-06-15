@@ -1,100 +1,74 @@
 # backendforth/.github
 
-Org-wide GitHub Actions reusable workflows. Repos under `backendforth/*` opt in
-by adding a thin caller workflow that points at the canonical workflow files
-here.
+Org-wide GitHub Actions reusable workflows for Slack PR notifications.
 
-## Reusable workflows
+## Workflows
 
-### `pr-slack-summary.yml` — PR → Slack with AI summary
+### `pr-slack-summary.yml` — PR open + merge
 
-Posts to `#github-logs` when a PR opens or merges. Drafts and fork PRs are
-skipped. One OpenRouter call per PR (on open only); merge posts a compact
-status line without re-summarizing.
+**On open** — fixed English template (always the same sections):
 
-#### Message layout
+1. PR title `#number`
+2. Status: `Open` / `Conflicts`
+3. Opener · latest commit · tags · related issues
+4. Commit count
+5. Files changed · lines added/deleted
+6. Summary (AI)
+7. Breaking changes (always shown; `_None_` if empty)
+8. Documentation (only when breaking changes exist and links were found)
+9. View PR · Start review
 
-**On open** — title, repo, author, AI summary, breaking changes (if any),
-status footer, Review button:
+**Dependabot PRs:** AI prompt prioritizes breaking changes and documentation links. A deterministic pass also scans the PR body for major semver bumps (`from X.x.x to Y.x.x` where Y > X) and extracts `https` URLs, merged with the AI output.
 
-```
-*PR title* (link)
-`repo` · `author`
-─────────────────
-2–3 sentence AI summary
-
-📥 Status: Offen          [Review PR →]
-```
-
-**On merge** — one line, no AI summary:
+**On merge** — compact line only:
 
 ```
 MERGED — PR #123 by `author`
-chore(ci): smoke-test Slack PR notification pipeline
-[View repo]  [View PR]
+PR title (linked)
+[View repo] [View PR]
 ```
 
-#### How to enroll a repo
-
-1. Make sure the two org secrets are accessible to this repo (see below).
-2. Drop this caller workflow into the repo at
-   `.github/workflows/pr-slack-notify.yml`:
-
-   ```yaml
-   name: PR Slack notify
-
-   on:
-     pull_request:
-       types: [opened, ready_for_review, closed]
-       branches:
-         - main
-         # add other long-lived branches the repo ships, e.g.:
-         # - variant/document-level
-
-   jobs:
-     notify:
-       uses: backendforth/.github/.github/workflows/pr-slack-summary.yml@main
-       secrets: inherit
-   ```
-
-3. Open a test PR — within ~30 s a message with summary + `📥 Status: Offen`
-   appears in `#github-logs`. Merge the PR → `MERGED — PR #N by author` with
-   repo and PR links (no second summary).
-
-#### Org secrets it expects
-
-Set both at the org level (Settings → Secrets and variables → Actions →
-Organization secrets) with repository access limited to the repos that opt in.
-
-| Secret | Where it comes from | Notes |
-|---|---|---|
-| `SLACK_WEBHOOK_URL` | Slack → Apps → Incoming Webhooks → pointed at `#github-logs` | Treat like a secret — anyone with this URL can post into the channel. |
-| `OPENROUTER_API_KEY` | <https://openrouter.ai/keys> | Create a dedicated key named `github-actions-pr-summary` with a small credit cap (e.g. $5) — the workflow uses well under $0.10 / month across four repos. |
-
-#### Optional input
-
-The default model is `google/gemini-3.1-flash-lite`. Override per-repo if
-needed:
+#### Caller (per repo)
 
 ```yaml
+name: PR Slack notify
+
+on:
+  pull_request:
+    types: [opened, ready_for_review, closed]
+    branches: [main]   # + variant/document-level in next-sanity-starter
+
 jobs:
   notify:
     uses: backendforth/.github/.github/workflows/pr-slack-summary.yml@main
     secrets: inherit
-    with:
-      model: anthropic/claude-haiku-4.5
 ```
 
-#### What the open message contains
+### `pr-slack-monthly-digest.yml` — monthly overview
 
-1. PR title (link) + repo + author
-2. AI-generated 2–3 sentence summary (OpenRouter, default `google/gemini-3.1-flash-lite`)
-3. Breaking-changes section (only when flagged)
-4. Status footer `📥 Offen` + Review button
+Runs for the **previous calendar month**. Posts totals, AI overview, highlights, contributors (humans, Dependabot, bots, Cursor/Claude/Copilot co-authors), dependency notes, and a PR index.
 
-Merge posts only a one-line status update — no second summary.
+#### Caller (per repo)
 
-## License
+```yaml
+name: PR monthly Slack digest
 
-Internal infrastructure — no license file. Workflows here are intended only
-for `backendforth/*` repositories.
+on:
+  schedule:
+    - cron: "0 6 1 * *"   # 1st of month, 06:00 UTC
+  workflow_dispatch:
+
+jobs:
+  digest:
+    uses: backendforth/.github/.github/workflows/pr-slack-monthly-digest.yml@main
+    secrets: inherit
+```
+
+## Org secrets
+
+| Secret | Purpose |
+|---|---|
+| `SLACK_WEBHOOK_URL` | Incoming Webhook → `#github-logs` |
+| `OPENROUTER_API_KEY` | AI summaries (set ~$5 credit cap) |
+
+Scope: all enrolled repos (`next-sanity-starter`, `bef-website-2026`, `farbstudio.de`, `mammalsandcomputers`).
