@@ -95,15 +95,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          SYSTEM='You analyze a GitHub pull request and emit STRICT JSON with three fields:
-- summary: 2-3 sentences describing intent and main changes. Plain prose, no markdown.
-- breaking_changes: array of bullet strings; [] if none.
-- risk: "low" | "medium" | "high".
-
-For Dependabot PRs, scan the body for major version bumps (X.x → Y.0) and list each as a breaking change.
-For feature PRs, scan title and body for BREAKING CHANGE, feat!, fix!, and explicit breaking notes.
-
-Be concise and concrete; no fluff. Output ONLY the JSON object, no markdown, no commentary.'
+          SYSTEM="You analyze a GitHub pull request and emit STRICT JSON with three fields: summary (2-3 sentences describing intent and main changes, plain prose, no markdown), breaking_changes (array of bullet strings, empty if none), risk (low, medium, or high). For Dependabot PRs, scan the body for major version bumps (X.x to Y.0) and list each as a breaking change. For feature PRs, scan title and body for BREAKING CHANGE, feat!, fix!, and explicit breaking notes. Be concise and concrete. Output ONLY the JSON object, no markdown, no commentary."
 
           PAYLOAD=$(jq -n \
             --arg system "$SYSTEM" \
