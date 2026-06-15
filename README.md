@@ -30,6 +30,7 @@ status footer, Review button:
 
 ```
 MERGED — PR #123 by `author`
+chore(ci): smoke-test Slack PR notification pipeline
 [View repo]  [View PR]
 ```
 
