@@ -10,6 +10,10 @@ on:
         required: true
       OPENROUTER_API_KEY:
         required: true
+      SLACK_BOT_TOKEN:
+        required: false
+      SLACK_CHANNEL_ID:
+        required: false
     inputs:
       model:
         type: string
@@ -229,8 +233,6 @@ jobs:
                     [{ type: "section", text: { type: "mrkdwn",
                       text: ("*Claude review*\n" + claude_ping($m)) } }]
                   else [] end)
-                + [{ type: "section", text: { type: "mrkdwn",
-                    text: ("*Claude test ping*\n<@U0BAPTE85TL> look at this PR and give us a short estimation.") } }]
                 + [{ type: "actions", elements: [
                     { type: "button", text: { type: "plain_text", text: "View PR" }, url: $m.url },
                     { type: "button", text: { type: "plain_text", text: "Start review" },
@@ -273,8 +275,83 @@ jobs:
           cat slack.json
 
       - name: Post to Slack
-        uses: slackapi/slack-github-action@v2
-        with:
-          webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
-          webhook-type: incoming-webhook
-          payload-file-path: ./slack.json
+        id: slack_post
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          SLACK_CHANNEL_ID: ${{ secrets.SLACK_CHANNEL_ID }}
+        run: |
+          set -euo pipefail
+
+          if [[ -n "${SLACK_BOT_TOKEN}" && -n "${SLACK_CHANNEL_ID}" ]]; then
+            jq -n --arg channel "$SLACK_CHANNEL_ID" --slurpfile body slack.json \
+              '$body[0] + {channel: $channel}' > slack-post.json
+
+            RESPONSE=$(curl -sS -X POST https://slack.com/api/chat.postMessage \
+              -H "Authorization: Bearer ${SLACK_BOT_TOKEN}" \
+              -H "Content-Type: application/json; charset=utf-8" \
+              -d @slack-post.json)
+
+            if [[ "$(echo "$RESPONSE" | jq -r '.ok')" != "true" ]]; then
+              echo "chat.postMessage failed: $(echo "$RESPONSE" | jq -r '.error')" >&2
+              exit 1
+            fi
+
+            echo "mode=bot" >> "$GITHUB_OUTPUT"
+            echo "message_ts=$(echo "$RESPONSE" | jq -r '.ts')" >> "$GITHUB_OUTPUT"
+            echo "Posted via Slack Bot API (enables reactions)."
+          else
+            HTTP_CODE=$(curl -sS -o slack-response.txt -w '%{http_code}' \
+              -H 'Content-Type: application/json' \
+              -d @slack.json \
+              "$SLACK_WEBHOOK_URL")
+
+            if [[ "$HTTP_CODE" != "200" ]]; then
+              echo "Webhook failed with HTTP ${HTTP_CODE}: $(cat slack-response.txt)" >&2
+              exit 1
+            fi
+
+            echo "mode=webhook" >> "$GITHUB_OUTPUT"
+            echo "Posted via incoming webhook (reactions need SLACK_BOT_TOKEN + SLACK_CHANNEL_ID)."
+          fi
+
+      - name: Add Slack reaction
+        if: steps.slack_post.outputs.mode == 'bot'
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          SLACK_CHANNEL_ID: ${{ secrets.SLACK_CHANNEL_ID }}
+          MESSAGE_TS: ${{ steps.slack_post.outputs.message_ts }}
+          EVENT_TYPE: ${{ steps.ctx.outputs.event_type }}
+        run: |
+          set -euo pipefail
+
+          if [[ "$EVENT_TYPE" == "merged" ]]; then
+            EMOJI="white_check_mark"
+          elif [[ "$(jq -r '.is_dependabot' meta.json)" == "true" ]]; then
+            EMOJI="package"
+          else
+            EMOJI="eyes"
+          fi
+
+          PAYLOAD=$(jq -n \
+            --arg channel "$SLACK_CHANNEL_ID" \
+            --arg timestamp "$MESSAGE_TS" \
+            --arg name "$EMOJI" \
+            '{channel: $channel, timestamp: $timestamp, name: $name}')
+
+          RESPONSE=$(curl -sS -X POST https://slack.com/api/reactions.add \
+            -H "Authorization: Bearer ${SLACK_BOT_TOKEN}" \
+            -H "Content-Type: application/json; charset=utf-8" \
+            -d "$PAYLOAD")
+
+          if [[ "$(echo "$RESPONSE" | jq -r '.ok')" != "true" ]]; then
+            ERROR=$(echo "$RESPONSE" | jq -r '.error')
+            if [[ "$ERROR" == "already_reacted" ]]; then
+              echo "Reaction :${EMOJI}: already present."
+              exit 0
+            fi
+            echo "reactions.add failed: ${ERROR}" >&2
+            exit 1
+          fi
+
+          echo "Added reaction :${EMOJI}:"
