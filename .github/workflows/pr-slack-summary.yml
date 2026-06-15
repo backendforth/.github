@@ -247,6 +247,8 @@ jobs:
                     { type: "button", text: { type: "plain_text", text: "Start review" },
                       url: $m.review_url, style: "primary" }
                   ]}]
+                + [{ type: "section", text: { type: "mrkdwn",
+                    text: "@Claude look at this PR and give us a short estimation" } }]
               ) }
             ] }' > slack.json
 
