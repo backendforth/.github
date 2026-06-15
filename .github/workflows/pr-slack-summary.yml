@@ -1,8 +1,7 @@
 name: PR → Slack summary
 
-# Open: fixed English template (metadata header + summary + breaking changes + links).
-# Merge: compact MERGED line + title + repo/PR links.
-# Dependabot: deterministic major-bump detection merged with AI output.
+# Open: PR body summary (not AI) + optional Dependabot AI for breaking changes.
+# Merge: compact message with code labels.
 
 on:
   workflow_call:
@@ -48,7 +47,15 @@ jobs:
             --arg repo "$GH_REPO" \
             --arg action "$EVENT_ACTION" \
             '($pr[0]) as $p |
-            ($p.body // "") as $body |
+            ($p.body // "") as $raw |
+            ($raw | gsub("<!--[\\s\\S]*?-->"; "")) as $body |
+            (if ($body | test("(?i)##[[:space:]]*Summary")) then
+              ($body | split("## Summary")[1] // $body | split("## summary")[1] // "" | split("\n##")[0] | gsub("^[[:space:]]+|[[:space:]]+$"; ""))
+            elif ($body | test("(?i)##[[:space:]]*Description")) then
+              ($body | split("## Description")[1] // $body | split("## description")[1] // "" | split("\n##")[0] | gsub("^[[:space:]]+|[[:space:]]+$"; ""))
+            else
+              ($body | split("\n\n")[0] // "")
+            end | gsub("^[[:space:]\n]+|[[:space:]\n]+$"; "")) as $summary_raw |
             ([$p.closingIssuesReferences[]? | "#\(.number)"] +
               ([$body | scan("#[0-9]+")] | unique)) as $issue_refs |
             (if $p.mergeStateStatus == "DIRTY" then "Conflicts"
@@ -56,6 +63,7 @@ jobs:
              else "Open" end) as $status |
             {
               repo: $repo,
+              repo_short: ($repo | split("/")[1]),
               number: $p.number,
               title: $p.title,
               url: $p.url,
@@ -70,18 +78,27 @@ jobs:
               additions: $p.additions,
               deletions: $p.deletions,
               body: $body,
+              pr_summary: (if ($summary_raw | length) > 0 then $summary_raw[0:3000] else "_No PR description provided._" end),
               is_dependabot: (($p.author.login | test("dependabot"; "i")) or
                 (([$p.labels[] | .name] | index("dependencies")) != null))
             }' > meta.json
 
-          # Deterministic Dependabot signals (major bumps + URLs from PR body)
+          jq -n \
+            --slurpfile meta meta.json \
+            '($meta[0].body // "") as $body |
+            ([$body | scan("(?i)BREAKING CHANGE[^\\n]*"; "g")]
+              + [$body | scan("(?i)\\bfeat!\\b[^\\n]*"; "g")]
+              + [$body | scan("(?i)\\bfix!\\b[^\\n]*"; "g")]) as $markers |
+            { breaking_changes: ($markers | unique), documentation_links: [] }' \
+            > human-detected.json
+
           if [[ "$(jq -r '.is_dependabot' meta.json)" == "true" ]]; then
             jq -n \
               --slurpfile meta meta.json \
               '($meta[0].body // "") as $body |
               ([$body | scan("from ([0-9]+)\\.[0-9]+\\.[0-9]+ to ([0-9]+)\\.[0-9]+\\.[0-9]+"; "g")]
                 | map(select((.[0] | tonumber) < (.[1] | tonumber)))
-                | map("Major version bump detected: v" + .[0] + ".x.x → v" + .[1] + ".x.x")) as $majors |
+                | map("Major version bump: v" + .[0] + ".x.x → v" + .[1] + ".x.x")) as $majors |
               ([$body | scan("https?://[^\\s)>\"]+"; "g")] | unique) as $urls |
               { breaking_changes: $majors, documentation_links: $urls }' \
               > dependabot-detected.json
@@ -95,9 +112,7 @@ jobs:
             echo "event_type=opened" >> "$GITHUB_OUTPUT"
           fi
 
-          cat meta.json
-
-      - name: Generate AI summary via OpenRouter
+      - name: Analyze Dependabot breaking changes (AI)
         if: steps.ctx.outputs.event_type == 'opened'
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
@@ -105,26 +120,20 @@ jobs:
         run: |
           set -euo pipefail
 
-          IS_DEP=$(jq -r '.is_dependabot' meta.json)
-
-          if [[ "$IS_DEP" == "true" ]]; then
-            SYSTEM="You analyze a Dependabot dependency pull request. Emit STRICT JSON only with fields: summary (1-2 sentences on package/version changes), breaking_changes (array of bullets — list EVERY major semver bump X.x.x to Y.0.0 and known breaking API changes; do not miss any), documentation_links (array of changelog, migration guide, and release-note URLs; extract every https URL from the PR body that points to docs, changelogs, GitHub releases, or npm package pages), risk (low, medium, or high). Breaking changes and documentation_links are critical. English only. No markdown in string values."
-          else
-            SYSTEM="You analyze a GitHub pull request. Emit STRICT JSON only with fields: summary (2-3 sentences on intent and main changes), breaking_changes (array of bullets; empty array if none; scan title and body for BREAKING CHANGE, feat!, fix!, and major dependency bumps), documentation_links (array of relevant documentation URLs from the PR body; empty array if none), risk (low, medium, or high). English only. No markdown in string values."
+          if [[ "$(jq -r '.is_dependabot' meta.json)" != "true" ]]; then
+            echo '{"breaking_changes":[],"documentation_links":[]}' > ai.json
+            exit 0
           fi
+
+          SYSTEM="You analyze a Dependabot dependency pull request body. Emit STRICT JSON only with fields: breaking_changes (array of bullets — list EVERY major semver bump and known breaking API change; do not miss any), documentation_links (array of changelog, migration guide, and release-note URLs found in the body). Do not mention Slack, chat channels, notifications, or where output is displayed. Analyze only the PR content. English only. No markdown in string values."
 
           PAYLOAD=$(jq -n \
             --arg system "$SYSTEM" \
             --slurpfile meta meta.json \
             --arg model "$MODEL" \
-            '{
-              model: $model,
-              response_format: { type: "json_object" },
-              messages: [
-                { role: "system", content: $system },
-                { role: "user", content: (($meta[0] | .body = (.body[0:12000])) | tostring) }
-              ]
-            }')
+            '{ model: $model, response_format: {type: "json_object"},
+               messages: [{role: "system", content: $system},
+                 {role: "user", content: (($meta[0].body[0:12000]) // "")}]}')
 
           for attempt in 1 2 3; do
             HTTP_CODE=$(curl -sS -o response.json -w '%{http_code}' \
@@ -132,37 +141,37 @@ jobs:
               -H "Authorization: Bearer $OPENROUTER_API_KEY" \
               -H "Content-Type: application/json" \
               -H "HTTP-Referer: https://github.com/backendforth" \
-              -H "X-Title: PR Slack Summary" \
+              -H "X-Title: PR Slack Analysis" \
               -d "$PAYLOAD")
-
             if [[ "$HTTP_CODE" == "200" ]]; then break; fi
-            echo "OpenRouter HTTP $HTTP_CODE (attempt $attempt)"
-            cat response.json || true
             if [[ $attempt -lt 3 && "$HTTP_CODE" -ge 500 ]]; then sleep 5; continue; fi
             exit 1
           done
 
-          CONTENT=$(jq -r '.choices[0].message.content' response.json | sed -E 's/^```(json)?//; s/```$//')
+          jq -r '.choices[0].message.content' response.json | sed -E 's/^```(json)?//; s/```$//' > ai-raw.json
+          jq '{breaking_changes: (.breaking_changes // []), documentation_links: (.documentation_links // [])}' ai-raw.json > ai.json 2>/dev/null || echo '{"breaking_changes":[],"documentation_links":[]}' > ai.json
 
-          if printf '%s' "$CONTENT" | jq empty 2>/dev/null; then
-            printf '%s' "$CONTENT" > ai.json
+      - name: Assemble analysis
+        if: steps.ctx.outputs.event_type == 'opened'
+        run: |
+          set -euo pipefail
+          IS_DEP=$(jq -r '.is_dependabot' meta.json)
+
+          if [[ "$IS_DEP" == "true" ]] && [[ -f ai.json ]]; then
+            jq -s '
+              .[0] as $ai | .[1] as $det | .[2] as $hum |
+              {
+                breaking_changes: ((($hum.breaking_changes // []) + ($ai.breaking_changes // []) + ($det.breaking_changes // [])) | unique),
+                documentation_links: ((($ai.documentation_links // []) + ($det.documentation_links // [])) | unique)
+              }' human-detected.json ai.json dependabot-detected.json > analysis.json
           else
-            jq -n --arg s "$CONTENT" \
-              '{summary: $s, breaking_changes: [], documentation_links: [], risk: "low"}' > ai.json
+            jq -s '
+              .[0] as $hum | .[1] as $det |
+              {
+                breaking_changes: ((($hum.breaking_changes // []) + ($det.breaking_changes // [])) | unique),
+                documentation_links: ($det.documentation_links // [])
+              }' human-detected.json dependabot-detected.json > analysis.json
           fi
-
-          jq -s '
-            .[0] as $ai | .[1] as $det |
-            {
-              summary: ($ai.summary // "No summary available."),
-              breaking_changes: ((($ai.breaking_changes // []) + ($det.breaking_changes // [])) | unique),
-              documentation_links: ((($ai.documentation_links // []) + ($det.documentation_links // [])) | unique),
-              risk: ($ai.risk // "low")
-            }
-          ' ai.json dependabot-detected.json > ai.final.json
-
-          mv ai.final.json ai.json
-          cat ai.json
 
       - name: Build Slack payload (opened)
         if: steps.ctx.outputs.event_type == 'opened'
@@ -171,42 +180,51 @@ jobs:
 
           jq -n \
             --slurpfile meta meta.json \
-            --slurpfile ai ai.json \
+            --slurpfile analysis analysis.json \
             '
+            def slack_code($s): "`" + $s + "`";
+            def slack_codeblock($s): "```\n" + $s + "\n```";
             ($meta[0]) as $m |
-            ($ai[0]) as $ai |
+            ($analysis[0]) as $a |
             (if ($m.labels | length) > 0
               then ([$m.labels[] | "`" + . + "`"] | join(" "))
               else "_none_" end) as $tags |
             (if ($m.related_issues | length) > 0
               then ($m.related_issues | join(", "))
               else "_none_" end) as $issues |
-            (if ($ai.breaking_changes | length) > 0
-              then ([$ai.breaking_changes[] | "- " + .] | join("\n"))
+            (if ($a.breaking_changes | length) > 0
+              then ([$a.breaking_changes[] | "- " + .] | join("\n"))
               else "_None_" end) as $breaking |
             { blocks: (
-              [
+              [{ type: "divider" }]
+              + [{ type: "context", elements: [
+                  { type: "mrkdwn", text: ("`" + $m.repo + "` · PR #" + ($m.number | tostring)) }
+                ]}]
+              + [
                 { type: "section", text: { type: "mrkdwn", text:
-                  ("*➔ New PR*\n" +
-                   "➔ *<" + $m.url + "|" + $m.title + ">* #" + ($m.number | tostring) + "\n" +
+                  (slack_code("➔ New PR") + "\n" +
+                   slack_code("➔ " + $m.title) + " <" + $m.url + "|#" + ($m.number | tostring) + ">\n" +
                    "*Status:* " + $m.status + "\n" +
                    "*Opener:* `" + $m.author + "` · *Latest commit:* `" + $m.head_sha + "` · *Tags:* " + $tags + " · *Related issues:* " + $issues + "\n" +
                    "*Commits:* " + ($m.commit_count | tostring) + "\n" +
                    "*Files:* " + ($m.changed_files | tostring) + " changed · *Lines:* +" + ($m.additions | tostring) + " / −" + ($m.deletions | tostring)) } },
                 { type: "divider" },
-                { type: "section", text: { type: "mrkdwn", text: ("*Summary*\n" + $ai.summary) } },
-                { type: "section", text: { type: "mrkdwn", text: ("*Breaking changes*\n" + $breaking) } }
+                { type: "section", text: { type: "mrkdwn",
+                  text: ("*Summary*\n" + (slack_codeblock($m.pr_summary))) } },
+                { type: "section", text: { type: "mrkdwn",
+                  text: ("*Breaking changes*\n" + (slack_codeblock($breaking))) } }
               ]
-              + (if (($ai.breaking_changes | length) > 0) and (($ai.documentation_links | length) > 0) then
+              + (if (($a.breaking_changes | length) > 0) and (($a.documentation_links | length) > 0) then
                   [{ type: "section", text: { type: "mrkdwn",
                     text: ("*Documentation*\n" +
-                      ([$ai.documentation_links[] | "- <" + . + "|" + . + ">"] | join("\n"))) } }]
+                      ([$a.documentation_links[] | "- <" + . + "|" + . + ">"] | join("\n"))) } }]
                 else [] end)
               + [{ type: "actions", elements: [
                   { type: "button", text: { type: "plain_text", text: "View PR" }, url: $m.url },
                   { type: "button", text: { type: "plain_text", text: "Start review" },
                     url: $m.review_url, style: "primary" }
                 ]}]
+              + [{ type: "divider" }]
             ) }' > slack.json
 
           cat slack.json
@@ -218,6 +236,7 @@ jobs:
           PR_URL: ${{ github.event.pull_request.html_url }}
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO_FULL: ${{ github.repository }}
           REPO_URL: ${{ github.event.repository.html_url }}
         run: |
           set -euo pipefail
@@ -227,17 +246,27 @@ jobs:
             --arg url "$PR_URL" \
             --arg author "$PR_AUTHOR" \
             --arg number "$PR_NUMBER" \
+            --arg repo "$REPO_FULL" \
             --arg repo_url "$REPO_URL" \
-            '{ blocks: [
-              { type: "section", text: { type: "mrkdwn",
-                text: ("*⤴ Merged PR*\n" +
-                  "⤴ PR <" + $url + "|#" + $number + "> by `" + $author + "`\n" +
-                  "<" + $url + "|" + $title + ">") } },
-              { type: "actions", elements: [
-                { type: "button", text: { type: "plain_text", text: "View repo" }, url: $repo_url },
-                { type: "button", text: { type: "plain_text", text: "View PR" }, url: $url, style: "primary" }
-              ]}
-            ] }' > slack.json
+            '
+            def slack_code($s): "`" + $s + "`";
+            { blocks: (
+              [{ type: "divider" }]
+              + [{ type: "context", elements: [
+                  { type: "mrkdwn", text: ("`" + $repo + "` · PR #" + $number) }
+                ]}]
+              + [
+                { type: "section", text: { type: "mrkdwn",
+                  text: (slack_code("⤴ Merged PR") + "\n" +
+                    slack_code("⤴ PR #" + $number + " by " + $author) + "\n" +
+                    "<" + $url + "|" + $title + ">") } },
+                { type: "actions", elements: [
+                  { type: "button", text: { type: "plain_text", text: "View repo" }, url: $repo_url },
+                  { type: "button", text: { type: "plain_text", text: "View PR" }, url: $url, style: "primary" }
+                ]}
+              ]
+              + [{ type: "divider" }]
+            ) }' > slack.json
 
           cat slack.json
 
