@@ -8,11 +8,29 @@ here.
 
 ### `pr-slack-summary.yml` — PR → Slack with AI summary
 
-Posts an AI-summarized Slack message to a single channel for every PR opened,
-marked ready-for-review, or merged on a watched branch. Drafts and fork PRs are
-skipped. Powered by an OpenRouter call (default model
-`google/gemini-3.1-flash-lite`) feeding a Slack Block Kit message via incoming
-webhook.
+Posts to `#github-logs` when a PR opens or merges. Drafts and fork PRs are
+skipped. One OpenRouter call per PR (on open only); merge posts a compact
+status line without re-summarizing.
+
+#### Message layout
+
+**On open** — title, repo, author, AI summary, breaking changes (if any),
+status footer, Review button:
+
+```
+*PR title* (link)
+`repo` · `author`
+─────────────────
+2–3 sentence AI summary
+
+📥 Status: Offen          [Review PR →]
+```
+
+**On merge** — status only (no duplicate summary):
+
+```
+✅ Status: Gemerged · `repo` · PR title (link) · `author`
+```
 
 #### How to enroll a repo
 
@@ -37,9 +55,9 @@ webhook.
        secrets: inherit
    ```
 
-3. Open a test PR — within ~30 s a `📥 New PR · <repo>` message should appear
-   in `#github-logs`. Merge the PR → a second `✅ Merged · <repo>` message
-   (without the Review button) follows.
+3. Open a test PR — within ~30 s a message with summary + `📥 Status: Offen`
+   appears in `#github-logs`. Merge the PR → a short `✅ Status: Gemerged` line
+   follows (no second AI summary).
 
 #### Org secrets it expects
 
@@ -65,16 +83,14 @@ jobs:
       model: anthropic/claude-haiku-4.5
 ```
 
-#### What the message contains
+#### What the open message contains
 
-1. Header — repo name, opened or merged
-2. PR title (clickable) + author
-3. AI-generated 2–3 sentence summary
-4. Breaking-changes section (only shown when the model flags at least one)
-5. "Review PR →" button (only on non-merged PRs)
+1. PR title (link) + repo + author
+2. AI-generated 2–3 sentence summary (OpenRouter, default `google/gemini-3.1-flash-lite`)
+3. Breaking-changes section (only when flagged)
+4. Status footer `📥 Offen` + Review button
 
-The model is prompted to flag major version bumps in Dependabot grouped PRs
-and `BREAKING CHANGE` / `feat!` / `fix!` markers in feature PRs.
+Merge posts only a one-line status update — no second summary.
 
 ## License
 
