@@ -8,23 +8,21 @@ Org-wide GitHub Actions reusable workflows for Slack PR notifications.
 
 **On open** — fixed English template (always the same sections):
 
-1. `➔ New PR` (plain text)
+1. `➔ New PR` + PR title `#number` (plain label, title+# linked in code backticks)
 2. `owner/repo` (code backticks)
-3. PR title `#number` (code backticks, linked)
 3. Status · opener · commit · tags · issues · files · lines
 4. **Summary** — from PR body (`## Summary` …), code block, not AI
 5. **Breaking changes** — always shown; code block
 6. **Documentation** — only when breaking changes + links exist
 7. View PR · Start review
 
-Green (`#2EB67D`) left bar via Slack attachment. Dividers top/bottom for separation.
+Attachment bar colors: green (`#2EB67D`) for human PRs, blue (`#439FE0`) for Dependabot. Divider only before Summary.
 
-**On merge** — compact card, purple (`#9B59B6`) attachment bar:
+**On merge** — compact card; purple (`#9B59B6`) for human merges, blue for Dependabot:
 
 ```
-⤴ Merged PR
+⤴ Merged PR title #123 (linked, code)
 owner/repo
-PR title #123 (linked)
 [View repo] [View PR]
 ```
 

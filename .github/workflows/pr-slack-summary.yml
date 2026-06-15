@@ -196,14 +196,13 @@ jobs:
             (if ($a.breaking_changes | length) > 0
               then ([$a.breaking_changes[] | "- " + .] | join("\n"))
               else "_None_" end) as $breaking |
+            (if $m.is_dependabot then "439FE0" else "2EB67D" end) as $accent |
             { attachments: [
-              { color: "2EB67D", blocks: (
-                [{ type: "divider" }]
-                + [
+              { color: $accent, blocks: (
+                [
                   { type: "section", text: { type: "mrkdwn", text:
-                    ("➔ New PR\n" +
-                     slack_code($m.repo) + "\n" +
-                     slack_link_code($m.url; $m.title + " #" + ($m.number | tostring))) } },
+                    ("➔ New PR " + slack_link_code($m.url; $m.title + " #" + ($m.number | tostring)) + "\n" +
+                     slack_code($m.repo)) } },
                   { type: "section", text: { type: "mrkdwn", text:
                     ("*Status:* " + $m.status + "\n" +
                      "*Opener:* `" + $m.author + "` · *Latest commit:* `" + $m.head_sha + "` · *Tags:* " + $tags + " · *Related issues:* " + $issues + "\n" +
@@ -225,7 +224,6 @@ jobs:
                     { type: "button", text: { type: "plain_text", text: "Start review" },
                       url: $m.review_url, style: "primary" }
                   ]}]
-                + [{ type: "divider" }]
               ) }
             ] }' > slack.json
 
@@ -234,37 +232,29 @@ jobs:
       - name: Build Slack payload (merged)
         if: steps.ctx.outputs.event_type == 'merged'
         env:
-          PR_TITLE: ${{ github.event.pull_request.title }}
-          PR_URL: ${{ github.event.pull_request.html_url }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          REPO_FULL: ${{ github.repository }}
           REPO_URL: ${{ github.event.repository.html_url }}
         run: |
           set -euo pipefail
 
           jq -n \
-            --arg title "$PR_TITLE" \
-            --arg url "$PR_URL" \
-            --arg number "$PR_NUMBER" \
-            --arg repo "$REPO_FULL" \
+            --slurpfile meta meta.json \
             --arg repo_url "$REPO_URL" \
             '
             def slack_code($s): "`" + $s + "`";
             def slack_link_code($url; $s): "<" + $url + "|`" + $s + "`>";
+            ($meta[0]) as $m |
+            (if $m.is_dependabot then "439FE0" else "9B59B6" end) as $accent |
             { attachments: [
-              { color: "9B59B6", blocks: (
-                [{ type: "divider" }]
-                + [
+              { color: $accent, blocks: (
+                [
                   { type: "section", text: { type: "mrkdwn",
-                    text: ("⤴ Merged PR\n" +
-                      slack_code($repo) + "\n" +
-                      slack_link_code($url; $title + " #" + $number)) } },
+                    text: ("⤴ Merged PR " + slack_link_code($m.url; $m.title + " #" + ($m.number | tostring)) + "\n" +
+                      slack_code($m.repo)) } },
                   { type: "actions", elements: [
                     { type: "button", text: { type: "plain_text", text: "View repo" }, url: $repo_url },
-                    { type: "button", text: { type: "plain_text", text: "View PR" }, url: $url, style: "primary" }
+                    { type: "button", text: { type: "plain_text", text: "View PR" }, url: $m.url, style: "primary" }
                   ]}
                 ]
-                + [{ type: "divider" }]
               ) }
             ] }' > slack.json
 
