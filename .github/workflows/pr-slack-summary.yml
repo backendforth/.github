@@ -213,7 +213,6 @@ jobs:
               else "_None_" end) as $breaking |
             (if $m.is_dependabot then "439FE0" else "2EB67D" end) as $accent |
             {
-              text: ($label + " " + $m.title + " #" + ($m.number | tostring)),
               attachments: [
                 { color: $accent, blocks: (
                   [
@@ -270,7 +269,6 @@ jobs:
             "💟 Merged PR" as $label |
             (if $m.is_dependabot then "439FE0" else "9B59B6" end) as $accent |
             {
-              text: ($label + " " + $m.title + " #" + ($m.number | tostring)),
               attachments: [
                 { color: $accent, blocks: (
                   [
@@ -307,7 +305,6 @@ jobs:
             "📛 Closed PR" as $label |
             (if $m.is_dependabot then "439FE0" else "CB2431" end) as $accent |
             {
-              text: ($label + " " + $m.title + " #" + ($m.number | tostring)),
               attachments: [
                 { color: $accent, blocks: (
                   [
