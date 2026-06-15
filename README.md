@@ -4,29 +4,29 @@ Org-wide GitHub Actions reusable workflows for Slack PR notifications.
 
 ## Workflows
 
-### `pr-slack-summary.yml` — PR open + merge
+### `pr-slack-summary.yml` — PR open, merge, and close
 
-**On open** — fixed English template (always the same sections):
-
-1. `➔ New PR` + PR title `#number` (plain label, title+# linked in code backticks)
-2. `owner/repo` (code backticks)
-3. Status · opener · commit · tags · issues · files · lines
-4. **Summary** — from PR body (`## Summary` …), code block, not AI
-5. **Breaking changes** — always shown; code block
-6. **Documentation** — only when breaking changes + links exist
-7. View PR · Start review
-
-**Dependabot PRs:** `*Claude review*` section @-mentions Claude (`<@U0BAPTE85TL>`). `/invite @Claude` in `#github-logs` required.
-
-Attachment bar colors: green (`#2EB67D`) for human PRs, blue (`#439FE0`) for Dependabot. Divider only before Summary.
-
-**On merge** — compact card; purple (`#9B59B6`) for human merges, blue for Dependabot:
+All notification types share the same header (no duplicate title/repo lines elsewhere):
 
 ```
-⤴ Merged PR title #123 (linked, code)
-owner/repo
-[View repo] [View PR]
+[emoji] New / Merged / Dependabot / Closed PR `title #number` (linked)
+`owner/repo`
 ```
+
+| Event | Header label | Bar color |
+|---|---|---|
+| Human opened | `✳️ New PR` | green `#2EB67D` |
+| Dependabot opened | `🛄 New Dependabot PR` | blue `#439FE0` |
+| Merged | `💟 Merged PR` | purple `#9B59B6` (human) / blue (Dependabot) |
+| Closed without merge | `📛 Closed PR` | red `#CB2431` (human) / blue (Dependabot) |
+
+**On open** — header, then metadata (status · opener · commit · tags · issues · files · lines), divider, **Summary** (from PR body `## Summary`, code block, not AI), **Breaking changes** (code block), optional **Documentation** (only when breaking changes + links exist), View PR · Start review.
+
+**Dependabot opens** also get a `*Claude review*` section @-mentioning Claude (`<@U0BAPTE85TL>`). `/invite @Claude` in `#github-logs` required.
+
+**On merge** — header, merged-by · files · lines, View repo · View PR.
+
+**On close (not merged)** — header, closed-by · opener, View repo · View PR.
 
 #### Caller (per repo)
 
@@ -73,6 +73,6 @@ jobs:
 | `SLACK_BOT_TOKEN` | Optional — `xoxb-…` with `chat:write` + `reactions:write` (posts + emoji reactions) |
 | `SLACK_CHANNEL_ID` | Optional — `#github-logs` channel ID (`C…`) |
 
-When `SLACK_BOT_TOKEN` and `SLACK_CHANNEL_ID` are set, messages post via `chat.postMessage` and get an emoji reaction: `:eyes:` (new PR), `:package:` (Dependabot), `:white_check_mark:` (merged). With webhook only, posting works but reactions do not (webhooks do not return a message timestamp).
+When `SLACK_BOT_TOKEN` and `SLACK_CHANNEL_ID` are set, messages post via `chat.postMessage` and get an emoji reaction: `:eyes:` (new PR), `:package:` (Dependabot), `:white_check_mark:` (merged), `:x:` (closed). With webhook only, posting works but reactions do not (webhooks do not return a message timestamp).
 
 Scope: all enrolled repos (`next-sanity-starter`, `bef-website-2026`, `farbstudio.de`, `mammalsandcomputers`).
