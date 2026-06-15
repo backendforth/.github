@@ -16,6 +16,8 @@ Org-wide GitHub Actions reusable workflows for Slack PR notifications.
 6. **Documentation** — only when breaking changes + links exist
 7. View PR · Start review
 
+**Dependabot PRs:** OpenRouter analyzes breaking changes and documentation links. When `SLACK_CLAUDE_USER_ID` is set, the message @-mentions Claude with a review request (GitHub-connected Claude Code in Slack).
+
 Attachment bar colors: green (`#2EB67D`) for human PRs, blue (`#439FE0`) for Dependabot. Divider only before Summary.
 
 **On merge** — compact card; purple (`#9B59B6`) for human merges, blue for Dependabot:
@@ -67,6 +69,9 @@ jobs:
 | Secret | Purpose |
 |---|---|
 | `SLACK_WEBHOOK_URL` | Incoming Webhook → `#github-logs` |
-| `OPENROUTER_API_KEY` | AI summaries (set ~$5 credit cap) |
+| `OPENROUTER_API_KEY` | Dependabot breaking-change analysis |
+| `SLACK_CLAUDE_USER_ID` | Optional — Slack member ID for `@Claude` on Dependabot PRs |
+
+**`SLACK_CLAUDE_USER_ID` setup:** In Slack, open `@Claude` → profile → ⋮ → *Copy member ID* (e.g. `U012ABCDEF`). Add as org secret. Claude must be invited in `#github-logs` (`/invite @Claude`) and your Claude account must have the repo authenticated at [claude.ai/code](https://claude.ai/code).
 
 Scope: all enrolled repos (`next-sanity-starter`, `bef-website-2026`, `farbstudio.de`, `mammalsandcomputers`).

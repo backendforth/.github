@@ -10,6 +10,8 @@ on:
         required: true
       OPENROUTER_API_KEY:
         required: true
+      SLACK_CLAUDE_USER_ID:
+        required: false
     inputs:
       model:
         type: string
@@ -175,16 +177,33 @@ jobs:
 
       - name: Build Slack payload (opened)
         if: steps.ctx.outputs.event_type == 'opened'
+        env:
+          SLACK_CLAUDE_USER_ID: ${{ secrets.SLACK_CLAUDE_USER_ID }}
         run: |
           set -euo pipefail
 
           jq -n \
             --slurpfile meta meta.json \
             --slurpfile analysis analysis.json \
+            --arg claude_id "${SLACK_CLAUDE_USER_ID}" \
             '
             def slack_code($s): "`" + $s + "`";
             def slack_codeblock($s): "```\n" + $s + "\n```";
             def slack_link_code($url; $s): "<" + $url + "|`" + $s + "`>";
+            def claude_mention($id):
+              if ($id | length) == 0 then ""
+              elif ($id | test("^<@[^>]+>$")) then $id
+              else "<@" + $id + ">"
+              end;
+            def claude_review($m; $id):
+              if ($id | length) == 0 then ""
+              else
+                claude_mention($id) + " Please review this Dependabot PR in " + slack_code($m.repo) + ": " +
+                "<" + $m.url + "|" + $m.title + " #" + ($m.number | tostring) + ">. " +
+                "Use your connected GitHub access to inspect the diff and release notes. " +
+                "Assess breaking changes, security impact, and whether auto-merge is safe. " +
+                "Reply in this thread with your recommendation."
+              end;
             ($meta[0]) as $m |
             ($analysis[0]) as $a |
             (if ($m.labels | length) > 0
@@ -218,6 +237,10 @@ jobs:
                     [{ type: "section", text: { type: "mrkdwn",
                       text: ("*Documentation*\n" +
                         ([$a.documentation_links[] | "- <" + . + "|" + . + ">"] | join("\n"))) } }]
+                  else [] end)
+                + (if $m.is_dependabot and (($claude_id | length) > 0) then
+                    [{ type: "section", text: { type: "mrkdwn",
+                      text: ("*Claude review*\n" + claude_review($m; $claude_id)) } }]
                   else [] end)
                 + [{ type: "actions", elements: [
                     { type: "button", text: { type: "plain_text", text: "View PR" }, url: $m.url },
