@@ -1,11 +1,7 @@
 name: PR → Slack summary
 
-# Reusable workflow: posts an AI-summarized Slack message when a PR opens,
-# and a compact status-only message when it merges. Skips drafts and fork PRs.
-#
-# Lifecycle:
-#   opened / ready_for_review → full card with AI summary
-#   merged                    → one line: MERGED — PR #N by author + repo/PR links
+# Open: structured metadata header + AI summary (English).
+# Merge: compact MERGED line + title + repo/PR links.
 
 on:
   workflow_call:
@@ -22,7 +18,7 @@ on:
 
 permissions:
   contents: read
-  pull-requests: write
+  pull-requests: read
 
 jobs:
   notify:
@@ -32,61 +28,85 @@ jobs:
       (github.event.action != 'closed' || github.event.pull_request.merged == true)
     runs-on: ubuntu-latest
     steps:
-      - name: Collect PR context
+      - name: Collect PR metadata
         id: ctx
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          EVENT_ACTION: ${{ github.event.action }}
         run: |
           set -euo pipefail
+
           gh pr view "$PR_NUMBER" --repo "$GH_REPO" \
-            --json title,body,labels,files,author,baseRefName,headRefName \
+            --json title,number,body,author,labels,commits,additions,deletions,changedFiles,mergeable,mergeStateStatus,headRefOid,closingIssuesReferences,url \
             > pr.json
 
           jq -n \
             --slurpfile pr pr.json \
             --arg repo "$GH_REPO" \
-            --arg number "$PR_NUMBER" \
-            '{
+            --arg action "$EVENT_ACTION" \
+            '($pr[0]) as $p |
+            ($p.body // "") as $body |
+            ([$p.closingIssuesReferences[]? | "#\(.number)"] +
+              ([$body | scan("#[0-9]+")] | unique)) as $issue_refs |
+            (if $p.mergeStateStatus == "DIRTY" then "Conflicts"
+             elif $action == "closed" then "Merged"
+             else "Open" end) as $status |
+            {
               repo: $repo,
-              number: ($number | tonumber),
-              title: $pr[0].title,
-              body: (($pr[0].body // "") | .[0:8000]),
-              labels: [$pr[0].labels[].name],
-              files: [$pr[0].files[] | {path, additions, deletions}],
-              author: $pr[0].author.login,
-              base: $pr[0].baseRefName,
-              head: $pr[0].headRefName
-            }' > context.json
+              number: $p.number,
+              title: $p.title,
+              url: $p.url,
+              review_url: ($p.url + "/files"),
+              author: $p.author.login,
+              status: $status,
+              head_sha: ($p.headRefOid[0:7]),
+              labels: [$p.labels[] | .name],
+              related_issues: $issue_refs,
+              commit_count: ($p.commits | length),
+              changed_files: $p.changedFiles,
+              additions: $p.additions,
+              deletions: $p.deletions,
+              body: ($body[0:12000]),
+              is_dependabot: (($p.author.login | test("dependabot"; "i")) or
+                (([$p.labels[] | .name] | index("dependencies")) != null))
+            }' > meta.json
 
-          if [[ "${{ github.event.action }}" == "closed" ]]; then
+          if [[ "$EVENT_ACTION" == "closed" ]]; then
             echo "event_type=merged" >> "$GITHUB_OUTPUT"
           else
             echo "event_type=opened" >> "$GITHUB_OUTPUT"
           fi
 
+          cat meta.json
+
       - name: Generate AI summary via OpenRouter
         if: steps.ctx.outputs.event_type == 'opened'
-        id: ai
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           MODEL: ${{ inputs.model }}
         run: |
           set -euo pipefail
 
-          SYSTEM="You analyze a GitHub pull request and emit STRICT JSON with three fields: summary (2-3 sentences describing intent and main changes, plain prose, no markdown), breaking_changes (array of bullet strings, empty if none), risk (low, medium, or high). For Dependabot PRs, scan the body for major version bumps (X.x to Y.0) and list each as a breaking change. For feature PRs, scan title and body for BREAKING CHANGE, feat!, fix!, and explicit breaking notes. Be concise and concrete. Output ONLY the JSON object, no markdown, no commentary."
+          IS_DEP=$(jq -r '.is_dependabot' meta.json)
+
+          if [[ "$IS_DEP" == "true" ]]; then
+            SYSTEM="You analyze a Dependabot dependency pull request. Emit STRICT JSON only: summary (1-2 sentences on package/version changes), breaking_changes (array of bullets for major bumps or breaking API changes; empty if none), documentation_links (array of URLs to changelogs, migration guides, or release notes from the PR body; empty if none), risk (low, medium, or high). Prioritize breaking_changes and documentation_links. English only. No markdown in string values."
+          else
+            SYSTEM="You analyze a GitHub pull request. Emit STRICT JSON only: summary (2-3 sentences on intent and main changes), breaking_changes (array of bullets; empty if none; scan for BREAKING CHANGE, feat!, fix!), documentation_links (array of relevant doc URLs from the PR body; empty if none), risk (low, medium, or high). English only. No markdown in string values."
+          fi
 
           PAYLOAD=$(jq -n \
             --arg system "$SYSTEM" \
-            --slurpfile ctx context.json \
+            --slurpfile meta meta.json \
             --arg model "$MODEL" \
             '{
               model: $model,
               response_format: { type: "json_object" },
               messages: [
                 { role: "system", content: $system },
-                { role: "user", content: ($ctx[0] | tostring) }
+                { role: "user", content: ($meta[0] | tostring) }
               ]
             }')
 
@@ -99,80 +119,75 @@ jobs:
               -H "X-Title: PR Slack Summary" \
               -d "$PAYLOAD")
 
-            if [[ "$HTTP_CODE" == "200" ]]; then
-              break
-            fi
-
-            echo "OpenRouter returned HTTP $HTTP_CODE (attempt $attempt)"
+            if [[ "$HTTP_CODE" == "200" ]]; then break; fi
+            echo "OpenRouter HTTP $HTTP_CODE (attempt $attempt)"
             cat response.json || true
-
-            if [[ $attempt -lt 3 && "$HTTP_CODE" -ge 500 ]]; then
-              sleep 5
-              continue
-            fi
-
-            echo "Aborting after attempt $attempt"
+            if [[ $attempt -lt 3 && "$HTTP_CODE" -ge 500 ]]; then sleep 5; continue; fi
             exit 1
           done
 
-          CONTENT=$(jq -r '.choices[0].message.content' response.json)
-          CONTENT=$(printf '%s' "$CONTENT" | sed -E 's/^```(json)?//; s/```$//')
+          CONTENT=$(jq -r '.choices[0].message.content' response.json | sed -E 's/^```(json)?//; s/```$//')
 
           if printf '%s' "$CONTENT" | jq empty 2>/dev/null; then
             printf '%s' "$CONTENT" > ai.json
           else
-            echo "AI response was not valid JSON; using fallback"
             jq -n --arg s "$CONTENT" \
-              '{summary: $s, breaking_changes: [], risk: "low"}' > ai.json
+              '{summary: $s, breaking_changes: [], documentation_links: [], risk: "low"}' > ai.json
           fi
 
           jq '{
             summary: (.summary // "No summary available."),
             breaking_changes: (.breaking_changes // []),
+            documentation_links: (.documentation_links // []),
             risk: (.risk // "low")
-          }' ai.json > ai.final.json
-          mv ai.final.json ai.json
+          }' ai.json > ai.final.json && mv ai.final.json ai.json
 
       - name: Build Slack payload (opened)
         if: steps.ctx.outputs.event_type == 'opened'
-        env:
-          PR_TITLE: ${{ github.event.pull_request.title }}
-          PR_URL: ${{ github.event.pull_request.html_url }}
-          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
-          REPO_NAME: ${{ github.event.repository.name }}
         run: |
           set -euo pipefail
 
           jq -n \
-            --arg title "$PR_TITLE" \
-            --arg url "$PR_URL" \
-            --arg author "$PR_AUTHOR" \
-            --arg repo "$REPO_NAME" \
+            --slurpfile meta meta.json \
             --slurpfile ai ai.json \
             '
+            ($meta[0]) as $m |
             ($ai[0]) as $ai |
+            (if ($m.labels | length) > 0
+              then ([$m.labels[] | "`" + . + "`"] | join(" "))
+              else "_none_") as $tags |
+            (if ($m.related_issues | length) > 0
+              then ($m.related_issues | join(", "))
+              else "_none_") as $issues |
+            ("*" + $m.title + "* <" + $m.url + "|#" + ($m.number | tostring) + ">") as $line1 |
+            ("*Status:* " + $m.status) as $line2 |
+            ("*Opener:* `" + $m.author + "` · *Latest commit:* `" + $m.head_sha + "` · *Tags:* " + $tags + " · *Related issues:* " + $issues) as $line3 |
+            ("*Commits:* " + ($m.commit_count | tostring)) as $line4 |
+            ("*Files:* " + ($m.changed_files | tostring) + " changed · *Lines:* +" + ($m.additions | tostring) + " / −" + ($m.deletions | tostring)) as $line5 |
             { blocks: (
               [
                 { type: "section", text: { type: "mrkdwn",
-                  text: ("*<" + $url + "|" + $title + ">*\n`" + $repo + "` · `" + $author + "`") } },
+                  text: ($line1 + "\n" + $line2 + "\n" + $line3 + "\n" + $line4 + "\n" + $line5) } },
                 { type: "divider" },
-                { type: "section", text: { type: "mrkdwn", text: $ai.summary } }
+                { type: "section", text: { type: "mrkdwn",
+                  text: ("*Summary*\n" + $ai.summary) } }
               ]
               + (if ($ai.breaking_changes | length) > 0 then
                   [{ type: "section", text: { type: "mrkdwn",
                     text: ("*Breaking changes*\n" +
                       ([$ai.breaking_changes[] | "- " + .] | join("\n"))) } }]
                 else [] end)
-              + [
-                { type: "context", elements: [
-                  { type: "mrkdwn", text: "*Status:* Open" }
-                ] },
-                { type: "actions", elements: [
-                  { type: "button",
-                    text: { type: "plain_text", text: "Start review" },
-                    url: $url, style: "primary" }
-                ] }
-              ]
+              + (if ($ai.documentation_links | length) > 0 then
+                  [{ type: "section", text: { type: "mrkdwn",
+                    text: ("*Documentation*\n" +
+                      ([$ai.documentation_links[] | "- <" + . + "|" + . + ">"] | join("\n"))) } }]
+                else [] end)
+              + [{ type: "actions", elements: [
+                  { type: "button", text: { type: "plain_text", text: "View PR" },
+                    url: $m.url },
+                  { type: "button", text: { type: "plain_text", text: "Start review" },
+                    url: $m.review_url, style: "primary" }
+                ]}]
             ) }' > slack.json
 
           cat slack.json
