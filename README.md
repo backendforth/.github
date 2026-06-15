@@ -8,7 +8,8 @@ Org-wide GitHub Actions reusable workflows for Slack PR notifications.
 
 **On open** — fixed English template (always the same sections):
 
-1. PR title `#number`
+1. `➔ New PR` label
+2. `➔` PR title `#number`
 2. Status: `Open` / `Conflicts`
 3. Opener · latest commit · tags · related issues
 4. Commit count
@@ -23,7 +24,8 @@ Org-wide GitHub Actions reusable workflows for Slack PR notifications.
 **On merge** — compact line only:
 
 ```
-MERGED — PR #123 by `author`
+⤴ Merged PR
+⤴ PR #123 by `author`
 PR title (linked)
 [View repo] [View PR]
 ```

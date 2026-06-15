@@ -187,7 +187,8 @@ jobs:
             { blocks: (
               [
                 { type: "section", text: { type: "mrkdwn", text:
-                  ("*" + $m.title + "* <" + $m.url + "|#" + ($m.number | tostring) + ">\n" +
+                  ("*➔ New PR*\n" +
+                   "➔ *<" + $m.url + "|" + $m.title + ">* #" + ($m.number | tostring) + "\n" +
                    "*Status:* " + $m.status + "\n" +
                    "*Opener:* `" + $m.author + "` · *Latest commit:* `" + $m.head_sha + "` · *Tags:* " + $tags + " · *Related issues:* " + $issues + "\n" +
                    "*Commits:* " + ($m.commit_count | tostring) + "\n" +
@@ -229,7 +230,9 @@ jobs:
             --arg repo_url "$REPO_URL" \
             '{ blocks: [
               { type: "section", text: { type: "mrkdwn",
-                text: ("*MERGED* — PR <" + $url + "|#" + $number + "> by `" + $author + "`\n<" + $url + "|" + $title + ">") } },
+                text: ("*⤴ Merged PR*\n" +
+                  "⤴ PR <" + $url + "|#" + $number + "> by `" + $author + "`\n" +
+                  "<" + $url + "|" + $title + ">") } },
               { type: "actions", elements: [
                 { type: "button", text: { type: "plain_text", text: "View repo" }, url: $repo_url },
                 { type: "button", text: { type: "plain_text", text: "View PR" }, url: $url, style: "primary" }
