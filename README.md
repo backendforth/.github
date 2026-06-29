@@ -55,7 +55,7 @@ name: PR monthly Slack digest
 
 on:
   schedule:
-    - cron: "0 6 1 * *"   # 1st of month, 06:00 UTC
+    - cron: "0 11 1 * *"  # 1st of month, 11:00 UTC (~12:00 Europe/Berlin)
   workflow_dispatch:
 
 jobs:
