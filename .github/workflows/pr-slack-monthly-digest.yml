@@ -147,15 +147,16 @@ jobs:
         run: |
           set -euo pipefail
           REPO="${{ github.repository }}"
+          ACCENT="#CCCCCC" # neutral light-gray bar for the monthly digest
 
           if [[ "$SKIP" == "true" ]]; then
-            jq -n --arg repo "$REPO" --arg month "$MONTH_LABEL" \
-              '{blocks: [{type: "section", text: {type: "mrkdwn", text: ("*Monthly digest · " + ($repo | split("/")[1]) + " · " + $month + "*\n_No PRs opened or closed in this period._")}}]}' > slack.json
+            jq -n --arg repo "$REPO" --arg month "$MONTH_LABEL" --arg accent "$ACCENT" \
+              '{attachments: [{color: $accent, blocks: [{type: "section", text: {type: "mrkdwn", text: ("*Monthly digest · " + ($repo | split("/")[1]) + " · " + $month + "*\n_No PRs opened or closed in this period._")}}]}]}' > slack.json
           else
-            jq -n --arg repo "$REPO" --arg month "$MONTH_LABEL" \
+            jq -n --arg repo "$REPO" --arg month "$MONTH_LABEL" --arg accent "$ACCENT" \
               --slurpfile ctx digest-context.json --slurpfile ai ai.json \
               '($ctx[0]) as $c | ($ai[0]) as $ai | ($c.totals) as $t |
-              {blocks: ([
+              {attachments: [{color: $accent, blocks: ([
                 {type: "header", text: {type: "plain_text", text: ("Monthly digest · " + ($repo | split("/")[1]) + " · " + $month), emoji: true}},
                 {type: "section", text: {type: "mrkdwn", text: ("*" + ($t.prs|tostring) + " PRs* · *" + ($t.merged|tostring) + " merged* · *+" + ($t.additions|tostring) + " / −" + ($t.deletions|tostring) + "* lines")}},
                 {type: "divider"},
@@ -165,7 +166,7 @@ jobs:
               ]
               + (if ($ai.dependency_notes | length) > 0 then
                   [{type: "section", text: {type: "mrkdwn", text: ("*Dependencies*\n" + $ai.dependency_notes)}}] else [] end)
-              + [{type: "section", text: {type: "mrkdwn", text: ("*PR index*" + (if ($c.prs | length) > 10 then " · latest 10 of " + ($c.prs | length | tostring) else "" end) + "\n" + ([$c.prs | sort_by(.number) | reverse | .[0:10][] | "• <https://github.com/" + $repo + "/pull/" + (.number|tostring) + "|#" + (.number|tostring) + "> " + .title + " — `" + .author + "` (" + .state + ")"] | join("\n")))}}])}' > slack.json
+              + [{type: "section", text: {type: "mrkdwn", text: ("*PR index*" + (if ($c.prs | length) > 10 then " · latest 10 of " + ($c.prs | length | tostring) else "" end) + "\n" + ([$c.prs | sort_by(.number) | reverse | .[0:10][] | "• <https://github.com/" + $repo + "/pull/" + (.number|tostring) + "|#" + (.number|tostring) + "> " + .title + " — `" + .author + "` (" + .state + ")"] | join("\n")))}}])}]}' > slack.json
           fi
           cat slack.json
 
