@@ -38,13 +38,18 @@ jobs:
           echo "month_label=$MONTH_LABEL" >> "$GITHUB_OUTPUT"
           echo "period=$START..$END" >> "$GITHUB_OUTPUT"
 
-          gh search prs --repo "$GH_REPO" --created "$START..$END" --limit 100 \
-            --json number,title,state,author,createdAt,closedAt,mergedAt,additions,deletions,changedFiles,labels,commits \
-            > prs-created.json 2>/dev/null || echo '[]' > prs-created.json
+          # Use `gh pr list --search`, NOT `gh search prs`: the latter runs over the
+          # issue-search API and does not expose mergedAt/additions/deletions/
+          # changedFiles — it errors on those --json fields. `gh pr list` runs over the
+          # GraphQL PR API and does. No error swallowing here on purpose: a failed query
+          # must fail the job, not silently emit an empty "No PRs" digest.
+          PR_FIELDS="number,title,state,author,createdAt,closedAt,mergedAt,additions,deletions,changedFiles,labels"
 
-          gh search prs --repo "$GH_REPO" --closed "$START..$END" --limit 100 \
-            --json number,title,state,author,createdAt,closedAt,mergedAt,additions,deletions,changedFiles,labels,commits \
-            > prs-closed.json 2>/dev/null || echo '[]' > prs-closed.json
+          gh pr list --repo "$GH_REPO" --state all --limit 100 \
+            --search "created:$START..$END" --json "$PR_FIELDS" > prs-created.json
+
+          gh pr list --repo "$GH_REPO" --state all --limit 100 \
+            --search "closed:$START..$END" --json "$PR_FIELDS" > prs-closed.json
 
           jq -s 'add | unique_by(.number) |
             map({
@@ -52,8 +57,7 @@ jobs:
               author: .author.login,
               labels: [.labels[]?.name],
               additions, deletions, changedFiles,
-              merged: .mergedAt,
-              co_authors: ([.commits[]?.message | scan("Co-authored-by: ([^<\\n]+)")] | flatten | unique)
+              merged: .mergedAt
             })' prs-created.json prs-closed.json > digest-data.json
 
           COUNT=$(jq 'length' digest-data.json)
@@ -69,14 +73,27 @@ jobs:
             | map({kind: .[0].author_kind, count: length, prs: map("#" + (.number | tostring))})
           ' digest-data.json > by-author-kind.json
 
-          jq '
-            [.[].co_authors[]? | gsub("^\\s+|\\s+$";"")]
+          # Co-author tools (Cursor/Claude/Copilot) live in commit trailers. The commits
+          # connection blows the GraphQL node limit in a bulk pr-list call, so fetch
+          # commits per PR (cheap for a monthly job) and tolerate individual failures.
+          # scan is case-insensitive on purpose: Cursor writes "Co-authored-by:",
+          # Claude writes "Co-Authored-By:".
+          : > co-authors.txt
+          for n in $(jq -r '.[].number' digest-data.json); do
+            gh pr view "$n" --repo "$GH_REPO" --json commits \
+              --jq '.commits[]? | (.messageHeadline + "\n" + .messageBody)' \
+              >> co-authors.txt 2>/dev/null || true
+          done
+
+          jq -R -s '
+            [scan("co-authored-by: ([^<\\n]+)"; "i")] | flatten
+            | map(gsub("^\\s+|\\s+$";""))
             | map(if test("Cursor"; "i") then "Cursor"
                   elif test("Claude"; "i") then "Claude"
                   elif test("Copilot"; "i") then "Copilot"
                   else empty end)
             | group_by(.) | map({tool: .[0], count: length})
-          ' digest-data.json > by-tool.json
+          ' co-authors.txt > by-tool.json
 
           jq -n \
             --arg repo "$GH_REPO" --arg month "$MONTH_LABEL" \
